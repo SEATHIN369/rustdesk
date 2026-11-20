@@ -292,6 +292,17 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // OEM ROMs and the IME can re-show the system bars behind our back;
+        // re-apply the hide on every insets pass while a session is immersive.
+        window.decorView.setOnApplyWindowInsetsListener { v, insets ->
+            if (immersiveRequested &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                insets.isVisible(WindowInsets.Type.systemBars())
+            ) {
+                window.insetsController?.hide(WindowInsets.Type.systemBars())
+            }
+            v.onApplyWindowInsets(insets)
+        }
         if (_rdClipboardManager == null) {
             _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
             FFI.setClipboardManager(_rdClipboardManager!!)

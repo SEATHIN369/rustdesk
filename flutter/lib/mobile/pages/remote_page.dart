@@ -124,10 +124,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   // Flutter's immersiveSticky alone is not reliable on all OEM ROMs, so Android
-  // also hides the system bars natively while the session page is visible.
+  // hides the system bars natively for the whole session (the native side also
+  // re-applies the hide on every insets change). Mixing Flutter SystemChrome
+  // with the native WindowInsetsController re-shows the bars on some ROMs.
   void _setImmersive(bool enable) {
     if (isAndroid) {
       gFFI.invokeMethod("set_immersive", enable);
+      return;
     }
     if (enable) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -137,13 +140,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  // Reserve the bottom strip taken by the UU keyboard sheet so the canvas
-  // re-fits above it and the peer cursor stays visible while typing.
+  // Reserve the bottom strip taken by the UU keyboard sheet. The canvas keeps
+  // its idle scale and pans so the peer cursor stays visible above the sheet.
   void _syncReserved() {
     if (!mounted) return;
     final h = MediaQuery.of(context).size.height;
-    gFFI.canvasModel.setMobileBottomReserved(
-        uuState.keyboardOpen.value ? h * kUuKeyboardSheetFraction : 0);
+    final reserved = uuState.keyboardOpen.value
+        ? (uuState.keyboardTab.value == 0
+            ? kUuTabStripHeight
+            : h * kUuKeyboardSheetFraction)
+        : 0.0;
+    gFFI.canvasModel.setMobileBottomReserved(reserved);
   }
 
   @override
@@ -180,7 +187,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _blockableOverlayState.applyFfi(gFFI);
     uuState.load();
     uuState.resetSessionUi();
-    _uuKeyboardWorker = ever(uuState.keyboardOpen, (_) {
+    _uuKeyboardWorker = everAll([uuState.keyboardOpen, uuState.keyboardTab], (_) {
       if (mounted) setState(() {});
       _syncReserved();
     });
@@ -353,7 +360,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _iosKeyboardWorkaroundTimer = null;
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        _setImmersive(false);
+        if (!isAndroid) _setImmersive(false);
         _mobileFocusNode.requestFocus();
       });
     }
@@ -480,6 +487,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     inputModel.inputKey(char);
   }
 
+  void _onSheetTab(int t) {
+    uuState.keyboardTab.value = t;
+    if (t == 0) {
+      openKeyboard();
+    } else {
+      _hideIme();
+    }
+  }
+
+  void _hideIme() {
+    setState(() => _showEdit = false);
+    gFFI.invokeMethod("enable_soft_keyboard", false);
+    _mobileFocusNode.unfocus();
+    _physicalFocusNode.requestFocus();
+  }
+
   void openKeyboard() {
     final allowWaylandKeyboard =
         mainGetPeerBoolOptionSync(widget.id, kPeerOptionAllowWaylandKeyboard);
@@ -516,7 +539,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       setState(() => _showEdit = true);
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        _setImmersive(false);
+        if (!isAndroid) _setImmersive(false);
         _mobileFocusNode.requestFocus();
       });
     });
@@ -614,15 +637,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                       ? Positioned(
                                           left: 0,
                                           right: 0,
-                                          bottom: 0,
+                                          bottom: uuState.keyboardTab.value == 0
+                                              ? MediaQuery.of(context)
+                                                  .viewInsets
+                                                  .bottom
+                                              : 0,
                                           child: UuKeyboardSheet(
-                                            onClose: () => uuState
-                                                .keyboardOpen.value = false,
-                                            onOpenIme: () {
+                                            onClose: () {
                                               uuState.keyboardOpen.value =
                                                   false;
-                                              openKeyboard();
+                                              _hideIme();
                                             },
+                                            onTabChange: _onSheetTab,
                                           ),
                                         )
                                       : const SizedBox.shrink()),

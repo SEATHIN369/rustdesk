@@ -167,9 +167,7 @@ Future<void> _saveItems(List<ShortcutItem> items) async {
 }
 
 class MobileShortcutPad extends StatefulWidget {
-  final bool embedded;
-
-  const MobileShortcutPad({Key? key, this.embedded = false}) : super(key: key);
+  const MobileShortcutPad({Key? key}) : super(key: key);
 
   @override
   State<MobileShortcutPad> createState() => _MobileShortcutPadState();
@@ -211,100 +209,65 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
       ..command = oldMeta;
   }
 
-  Widget _header() {
-    return Row(
-      children: [
-        if (widget.embedded)
-          const Spacer()
-        else
-          const Expanded(
-            child: Text('快捷键',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600)),
-          ),
-        Text(
-          _editing ? '拖动排序，垃圾桶删除' : '点击发送',
-          style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
-        ),
-        IconButton(
-          icon: Icon(_editing ? Icons.check : Icons.edit,
-              color: Colors.white70, size: 20),
-          onPressed: () => setState(() => _editing = !_editing),
-        ),
-      ],
-    );
-  }
-
-  Widget _modifierRow() {
-    final input = gFFI.inputModel;
-    return Wrap(
-      spacing: 8,
-      children: [
-        _modifier('Ctrl', input.ctrl, (v) => setState(() => input.ctrl = v)),
-        _modifier('Alt', input.alt, (v) => setState(() => input.alt = v)),
-        _modifier('Shift', input.shift, (v) => setState(() => input.shift = v)),
-        _modifier(_isMac ? 'Cmd' : 'Win', input.command,
-            (v) => setState(() => input.command = v)),
-      ],
-    );
-  }
-
-  Widget _modifier(String label, bool active, ValueChanged<bool> onChanged) {
-    return FilterChip(
-      label: Text(label, style: const TextStyle(fontSize: 12)),
-      selected: active,
-      onSelected: onChanged,
-      labelStyle: TextStyle(color: active ? Colors.black : Colors.white),
-      selectedColor: MyTheme.accent,
-      backgroundColor: Colors.transparent,
-      side: BorderSide(color: Colors.white.withOpacity(0.3)),
-      visualDensity: VisualDensity.compact,
-    );
-  }
-
+  // UU-style browse grid: left "编辑" entry plus large two-line buttons.
   Widget _viewBody() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _modifierRow(),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final item in _items)
-                OutlinedButton(
-                  onPressed: () => _send(item),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: BorderSide(color: Colors.white.withOpacity(0.25)),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    minimumSize: const Size(0, 36),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(item.label(_isMac),
-                          style: const TextStyle(fontSize: 13)),
-                      if (item.desc.isNotEmpty)
-                        Text(item.desc,
-                            style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.white.withOpacity(0.55))),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
+    return LayoutBuilder(builder: (context, constraints) {
+      final columns = (constraints.maxWidth / 130).floor().clamp(4, 9);
+      return GridView.builder(
+        padding: const EdgeInsets.all(8),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: columns,
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
+          childAspectRatio: 2.6,
+        ),
+        itemCount: _items.length + 1,
+        itemBuilder: (ctx, index) {
+          if (index == 0) {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _editing = true),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.edit, color: MyTheme.accent, size: 20),
+                  const SizedBox(height: 4),
+                  Text('编辑',
+                      style: TextStyle(color: MyTheme.accent, fontSize: 13)),
+                ],
+              ),
+            );
+          }
+          final item = _items[index - 1];
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _send(item),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF4A4D52),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(item.label(_isMac),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                  if (item.desc.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(item.desc,
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12)),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    });
   }
 
   Widget _editBody(BuildContext context) {
@@ -354,6 +317,12 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Row(
             children: [
+              TextButton(
+                onPressed: () => setState(() => _editing = false),
+                child: Text('完成',
+                    style: TextStyle(color: MyTheme.accent, fontSize: 13)),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () => _addItem(context),
@@ -463,38 +432,6 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
 
   @override
   Widget build(BuildContext context) {
-    final content = Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!widget.embedded)
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 8),
-                decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.3),
-                    borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-          _header(),
-          const SizedBox(height: 4),
-          Flexible(
-            child: _editing ? _editBody(context) : _viewBody(),
-          ),
-        ],
-      ),
-    );
-    if (widget.embedded) return content;
-    return SafeArea(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.7),
-        child: content,
-      ),
-    );
+    return _editing ? _editBody(context) : _viewBody();
   }
 }

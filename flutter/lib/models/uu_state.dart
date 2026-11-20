@@ -6,9 +6,14 @@ import 'platform_model.dart';
 
 const String kUuSchemesOption = 'uu-control-schemes';
 
-// Fraction of the screen height occupied by the UU-style keyboard sheet;
-// the remote canvas re-fits into the remaining top area while it is open.
-const double kUuKeyboardSheetFraction = 0.56;
+// Fraction of the screen height occupied by the UU-style keyboard sheet.
+// The canvas keeps its idle scale and only pans so the peer cursor stays
+// visible above the sheet.
+const double kUuKeyboardSheetFraction = 0.52;
+
+// Height of the sheet's tab strip; when the IME tab is active the sheet
+// collapses to this strip and floats right above the system keyboard.
+const double kUuTabStripHeight = 44;
 
 class UuFloatingKey {
   String id;
@@ -136,6 +141,11 @@ class UuState {
   final activeName = ''.obs;
   final railOpen = false.obs;
   final keyboardOpen = false.obs;
+  // 0 = 输入法 (system IME), 1 = 快捷键, 2 = 电脑键盘
+  final keyboardTab = 2.obs;
+  // Normalized position of the idle edge button (draggable, persisted).
+  double railX = 0.97;
+  double railY = 0.5;
   // null = closed, otherwise 'menu' / 'schemes' / 'settings'
   final drawerPage = RxnString();
   final editLayout = false.obs;
@@ -164,6 +174,8 @@ class UuState {
               .map((e) => UuScheme.fromJson(e.cast<String, dynamic>()))
               .toList();
           active = decoded['active']?.toString() ?? '';
+          railX = (decoded['railX'] as num?)?.toDouble() ?? 0.97;
+          railY = (decoded['railY'] as num?)?.toDouble() ?? 0.5;
         }
       }
     } catch (_) {}
@@ -179,6 +191,8 @@ class UuState {
       value: json.encode({
         'active': activeName.value,
         'schemes': schemes.map((e) => e.toJson()).toList(),
+        'railX': railX,
+        'railY': railY,
       }),
     );
   }
@@ -186,6 +200,7 @@ class UuState {
   void resetSessionUi() {
     railOpen.value = false;
     keyboardOpen.value = false;
+    keyboardTab.value = 2;
     drawerPage.value = null;
     editLayout.value = false;
   }

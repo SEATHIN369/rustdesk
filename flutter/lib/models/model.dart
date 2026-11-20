@@ -2315,7 +2315,8 @@ class CanvasModel with ChangeNotifier {
     final dw = getDisplayWidth().toDouble();
     final dh = getDisplayHeight().toDouble();
     if (dw <= 0 || dh <= 0 || size.width <= 0 || size.height <= 0) return;
-    final fit = min(size.width / dw, size.height / dh);
+    final fit = min(
+        size.width / dw, (isMobile ? _mobileFullHeight : size.height) / dh);
     final oneToOne = kIgnoreDpi ? 1.0 / _devicePixelRatio : 1.0;
     var snappedScale = _scale;
     if (fit.isFinite && fit > 0 && (_scale - fit).abs() <= fit * 0.04) {
@@ -2339,8 +2340,8 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
-  // Bottom strip reserved by the UU-style keyboard sheet. The canvas re-fits
-  // into the remaining top area so the peer cursor stays visible above it.
+  // Bottom strip reserved by the UU-style keyboard sheet. The canvas keeps its
+  // idle full-screen scale and only pans so the peer cursor stays visible.
   void setMobileBottomReserved(double height) {
     if (_mobileBottomReserved == height) return;
     _mobileBottomReserved = height;
@@ -2348,18 +2349,48 @@ class CanvasModel with ChangeNotifier {
     final dw = getDisplayWidth();
     final dh = getDisplayHeight();
     if (dw <= 0 || dh <= 0 || size.width <= 0 || size.height <= 0) return;
-    if (_lastViewStyle.style == kRemoteViewStyleAdaptive) {
-      _scale = ViewStyle(
-        style: _lastViewStyle.style,
-        width: size.width,
-        height: size.height,
-        displayWidth: dw,
-        displayHeight: dh,
-      ).scale;
-      _resetCanvasOffset(dw, dh);
+    if (height > 0) {
+      ensureCursorVisible();
     } else {
-      _clampOffsetToViewport();
+      _resetCanvasOffset(dw, dh);
     }
+    isMobileCanvasChanged = true;
+    notifyListeners();
+  }
+
+  // Full-screen height before the sheet/IME reservations were subtracted;
+  // used to keep the adaptive scale identical to the idle fit.
+  double get _mobileFullHeight =>
+      size.height +
+      _mobileBottomReserved +
+      MediaQueryData.fromView(ui.window).viewInsets.bottom;
+
+  // Minimal pan that brings the peer cursor back into the visible viewport
+  // (the strip above the UU sheet). No-op when nothing is reserved.
+  void ensureCursorVisible() {
+    if (!isMobile || _mobileBottomReserved <= 0) return;
+    if (parent.target?.imageModel.image == null) return;
+    final off = parent.target?.cursorModel.getCanvasOffsetToCenterCursor();
+    if (off == null) return;
+    final cx = size.width / 2 - off.dx;
+    final cy = size.height / 2 - off.dy;
+    const margin = 24.0;
+    var dx = 0.0;
+    var dy = 0.0;
+    if (cx < margin) {
+      dx = margin - cx;
+    } else if (cx > size.width - margin) {
+      dx = size.width - margin - cx;
+    }
+    if (cy < margin) {
+      dy = margin - cy;
+    } else if (cy > size.height - margin) {
+      dy = size.height - margin - cy;
+    }
+    if (dx == 0 && dy == 0) return;
+    _x += dx;
+    _y += dy;
+    _clampOffsetToViewport();
     isMobileCanvasChanged = true;
     notifyListeners();
   }
@@ -2458,10 +2489,16 @@ class CanvasModel with ChangeNotifier {
     updateSize();
     final displayWidth = getDisplayWidth();
     final displayHeight = getDisplayHeight();
+    // With the UU sheet/IME open the viewport shrinks, but the adaptive scale
+    // stays at the idle full-screen fit so the desktop remains readable; only
+    // the offset pans to keep the peer cursor visible.
+    final styleHeight = isMobile && style == kRemoteViewStyleAdaptive
+        ? _mobileFullHeight
+        : size.height;
     final viewStyle = ViewStyle(
       style: style,
       width: size.width,
-      height: size.height,
+      height: styleHeight,
       displayWidth: displayWidth,
       displayHeight: displayHeight,
     );
@@ -3895,6 +3932,9 @@ class CursorModel with ChangeNotifier {
       //
     }
     notifyListeners();
+    if (isMobile) {
+      parent.target?.canvasModel.ensureCursorVisible();
+    }
   }
 
   updateDisplayOrigin(double x, double y, {updateCursorPos = true}) {

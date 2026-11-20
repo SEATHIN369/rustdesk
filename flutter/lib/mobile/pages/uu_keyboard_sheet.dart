@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get.dart';
 
 import '../../common.dart';
 import '../../consts.dart';
@@ -9,10 +10,10 @@ import 'shortcut_pad.dart';
 
 class UuKeyboardSheet extends StatefulWidget {
   final VoidCallback onClose;
-  final VoidCallback onOpenIme;
+  final ValueChanged<int> onTabChange;
 
   const UuKeyboardSheet(
-      {Key? key, required this.onClose, required this.onOpenIme})
+      {Key? key, required this.onClose, required this.onTabChange})
       : super(key: key);
 
   @override
@@ -20,96 +21,87 @@ class UuKeyboardSheet extends StatefulWidget {
 }
 
 class _UuKeyboardSheetState extends State<UuKeyboardSheet> {
-  int _tab = 2;
-
   Widget _tabButton(int index, String label) {
-    final selected = _tab == index;
-    return Expanded(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => setState(() => _tab = index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: selected ? MyTheme.accent : Colors.transparent,
-                width: 2,
-              ),
-            ),
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: selected ? MyTheme.accent : Colors.white70,
-              fontSize: 15,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+    return Obx(() {
+      final selected = uuState.keyboardTab.value == index;
+      return Expanded(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => widget.onTabChange(index),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? MyTheme.accent : Colors.white70,
+                    fontSize: 15,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Container(
+                  width: 46,
+                  height: 2,
+                  color: selected ? MyTheme.accent : Colors.transparent,
+                ),
+              ],
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final height =
-        MediaQuery.of(context).size.height * kUuKeyboardSheetFraction;
-    return Container(
-      height: height,
-      color: const Color(0xFF313135),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              _tabButton(0, '输入法'),
-              _tabButton(1, '快捷键'),
-              _tabButton(2, '电脑键盘'),
-              IconButton(
-                icon: const Icon(Icons.cancel, color: Colors.white70, size: 22),
-                onPressed: widget.onClose,
+    return Obx(() {
+      final tab = uuState.keyboardTab.value;
+      final height = tab == 0
+          ? kUuTabStripHeight
+          : MediaQuery.of(context).size.height * kUuKeyboardSheetFraction;
+      return Container(
+        height: height,
+        color: const Color(0xFF383B40),
+        child: Column(
+          children: [
+            Container(
+              height: kUuTabStripHeight,
+              color: const Color(0xFF2E3136),
+              child: Row(
+                children: [
+                  _tabButton(0, '输入法'),
+                  _tabButton(1, '快捷键'),
+                  _tabButton(2, '电脑键盘'),
+                  SizedBox(
+                    width: 48,
+                    child: Center(
+                      child: GestureDetector(
+                        onTap: widget.onClose,
+                        child: const Icon(Icons.cancel,
+                            color: Colors.white70, size: 22),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          Expanded(
-            child: IndexedStack(
-              index: _tab,
-              children: [
-                _imeTab(),
-                const MobileShortcutPad(embedded: true),
-                const _PcKeyboard(),
-              ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _imeTab() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            '用系统输入法打字，候选词与联想照常可用',
-            style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: widget.onOpenIme,
-            icon: const Icon(Icons.keyboard, size: 18),
-            label: const Text('唤起系统输入法'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white,
-              side: BorderSide(color: Colors.white.withOpacity(0.3)),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            ),
-          ),
-        ],
-      ),
-    );
+            if (tab != 0)
+              Expanded(
+                child: IndexedStack(
+                  index: tab,
+                  children: const [
+                    SizedBox.shrink(),
+                    MobileShortcutPad(),
+                    _PcKeyboard(),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -238,7 +230,7 @@ class _PcKeyboardState extends State<_PcKeyboard> {
     return false;
   }
 
-  Widget _modifier(String label, String name) {
+  Widget _modifier(String label, String name, {IconData? icon}) {
     final active = _flag(name);
     final latch = scheme.comboLatch;
     return Expanded(
@@ -259,19 +251,22 @@ class _PcKeyboardState extends State<_PcKeyboard> {
                 ? () => setState(() => _setFlag(name, !active))
                 : null,
             child: Container(
-              height: 34,
+              height: 40,
               decoration: BoxDecoration(
-                color: active ? MyTheme.accent : const Color(0xFF48484A),
+                color: active ? MyTheme.accent : const Color(0xFF4A4D52),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Center(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: active ? Colors.black : Colors.white,
-                    fontSize: 13,
-                  ),
-                ),
+                child: icon != null
+                    ? Icon(icon,
+                        color: active ? Colors.black : Colors.white, size: 18)
+                    : Text(
+                        label,
+                        style: TextStyle(
+                          color: active ? Colors.black : Colors.white,
+                          fontSize: 14,
+                        ),
+                      ),
               ),
             ),
           ),
@@ -315,7 +310,8 @@ class _PcKeyboardState extends State<_PcKeyboard> {
           _modifier('Ctrl', 'VK_CONTROL'),
           _modifier('Shift', 'VK_SHIFT'),
           _modifier('Alt', 'VK_MENU'),
-          _modifier(isMac ? 'Cmd' : 'Win', 'Meta'),
+          _modifier(isMac ? 'Cmd' : 'Win', 'Meta',
+              icon: isMac ? null : Icons.window),
         ],
       ),
     );
@@ -331,7 +327,7 @@ class _PcKeyboardState extends State<_PcKeyboard> {
           onTap: () => _tapKey(key),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFF48484A),
+              color: const Color(0xFF4A4D52),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Center(

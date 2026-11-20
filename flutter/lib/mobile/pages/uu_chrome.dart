@@ -28,7 +28,9 @@ class UuChrome extends StatefulWidget {
 
 class _UuChromeState extends State<UuChrome> {
   Timer? _hideTimer;
+  Timer? _fadeTimer;
   Worker? _railWorker;
+  bool _faded = false;
 
   @override
   void initState() {
@@ -39,15 +41,28 @@ class _UuChromeState extends State<UuChrome> {
         _hideTimer = Timer(const Duration(seconds: 6), () {
           uuState.railOpen.value = false;
         });
+      } else {
+        _poke();
       }
     });
+    _poke();
   }
 
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _fadeTimer?.cancel();
     _railWorker?.dispose();
     super.dispose();
+  }
+
+  // Idle edge button fades out after a few seconds without interaction.
+  void _poke() {
+    _fadeTimer?.cancel();
+    if (_faded) setState(() => _faded = false);
+    _fadeTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _faded = true);
+    });
   }
 
   void _sendWinCombo(String key) {
@@ -75,57 +90,95 @@ class _UuChromeState extends State<UuChrome> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: Colors.white, size: 22),
-          const SizedBox(height: 4),
+          Icon(icon, color: Colors.white, size: 26),
+          const SizedBox(height: 6),
           Text(label,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 10)),
+              style: const TextStyle(color: Colors.white, fontSize: 11)),
         ],
       ),
     );
   }
 
-  Widget _edgeButton() {
-    return GestureDetector(
-      onTap: () => uuState.railOpen.value = true,
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.black.withOpacity(0.35),
-          border: Border.all(color: Colors.white.withOpacity(0.15)),
+  Widget _edgeButton(Size size) {
+    final px =
+        (uuState.railX * size.width).clamp(0.0, size.width - 56).toDouble();
+    final py =
+        (uuState.railY * size.height).clamp(0.0, size.height - 56).toDouble();
+    return Positioned(
+      left: px,
+      top: py,
+      child: GestureDetector(
+        onTap: () {
+          _poke();
+          uuState.railOpen.value = true;
+        },
+        onPanStart: (_) => _poke(),
+        onPanUpdate: (d) {
+          setState(() {
+            final nx =
+                (px + d.delta.dx).clamp(0.0, size.width - 56).toDouble();
+            final ny =
+                (py + d.delta.dy).clamp(0.0, size.height - 56).toDouble();
+            uuState.railX = nx / size.width;
+            uuState.railY = ny / size.height;
+          });
+        },
+        onPanEnd: (_) {
+          uuState.save();
+          _poke();
+        },
+        child: AnimatedOpacity(
+          opacity: _faded ? 0.15 : 0.55,
+          duration: const Duration(milliseconds: 600),
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.black.withOpacity(0.55),
+            ),
+            child: const Icon(Icons.tune, color: Colors.white, size: 22),
+          ),
         ),
-        child: Icon(Icons.tune, color: Colors.white.withOpacity(0.85), size: 22),
       ),
     );
   }
 
+  // UU-style expanded rail: no background panel, four items spread over the
+  // full right edge; tapping anywhere else collapses it.
   Widget _rail() {
     final isPeerAndroid = gFFI.ffiModel.isPeerAndroid;
-    return Positioned(
-      top: 0,
-      bottom: 0,
-      right: 0,
-      width: 64,
-      child: Container(
-        color: Colors.black.withOpacity(0.85),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _railItem(Icons.tune, '操作', () => _openDrawer('menu')),
-            _railItem(Icons.keyboard, '键盘', _openKeyboard),
-            _railItem(Icons.desktop_windows, '显示桌面',
-                () => _sendWinCombo('VK_D')),
-            _railItem(
-                isPeerAndroid ? Icons.build : Icons.grid_view,
-                isPeerAndroid ? '更多操作' : '所有窗口',
-                () => isPeerAndroid
-                    ? gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
-                    : _sendWinCombo('VK_TAB')),
-          ],
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => uuState.railOpen.value = false,
+          ),
         ),
-      ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: 72,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _railItem(Icons.tune, '操作', () => _openDrawer('menu')),
+              _railItem(Icons.keyboard, '键盘', _openKeyboard),
+              _railItem(Icons.desktop_windows, '显示桌面',
+                  () => _sendWinCombo('VK_D')),
+              _railItem(
+                  isPeerAndroid ? Icons.build : Icons.grid_view,
+                  isPeerAndroid ? '更多操作' : '所有窗口',
+                  () => isPeerAndroid
+                      ? gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
+                      : _sendWinCombo('VK_TAB')),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -141,12 +194,7 @@ class _UuChromeState extends State<UuChrome> {
       if (uuState.railOpen.value) {
         return _rail();
       }
-      final size = MediaQuery.of(context).size;
-      return Positioned(
-        right: 8,
-        top: size.height / 2 - 24,
-        child: _edgeButton(),
-      );
+      return _edgeButton(MediaQuery.of(context).size);
     });
   }
 

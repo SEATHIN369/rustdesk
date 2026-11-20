@@ -32,6 +32,7 @@ class UuChrome extends StatefulWidget {
 class _UuChromeState extends State<UuChrome> {
   Timer? _hideTimer;
   Timer? _fadeTimer;
+  Timer? _privacyRetryTimer;
   Worker? _railWorker;
   bool _faded = false;
 
@@ -55,6 +56,7 @@ class _UuChromeState extends State<UuChrome> {
   void dispose() {
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
+    _privacyRetryTimer?.cancel();
     _railWorker?.dispose();
     super.dispose();
   }
@@ -584,6 +586,18 @@ class _UuChromeState extends State<UuChrome> {
               }
               bind.sessionTogglePrivacyMode(
                   sessionId: sessionId, implKey: vdImpl, on: !on);
+              _privacyRetryTimer?.cancel();
+              if (!on) {
+                // First turn-on can race the Idd driver install ("No virtual
+                // displays"); by the retry the device has usually appeared.
+                _privacyRetryTimer = Timer(const Duration(seconds: 4), () {
+                  if (!mounted) return;
+                  if (PrivacyModeState.find(widget.id).value.isEmpty) {
+                    bind.sessionTogglePrivacyMode(
+                        sessionId: sessionId, implKey: vdImpl, on: true);
+                  }
+                });
+              }
             },
           );
         }),

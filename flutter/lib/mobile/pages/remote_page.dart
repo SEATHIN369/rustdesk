@@ -14,6 +14,7 @@ import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 import '../../common.dart';
 import '../../common/widgets/overlay.dart';
@@ -112,6 +113,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Worker? _uuKeyboardWorker;
   bool _uuKeyboardWasOpen = false;
   bool _autoUnlockDone = false;
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  Timer? _flipTimer;
+  DeviceOrientation? _flipTarget;
+  DeviceOrientation? _appliedLandscape;
   bool _waylandKeyboardGateInitialized = false;
 
   InputModel get inputModel => gFFI.inputModel;
@@ -182,6 +187,28 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+    // With system auto-rotate off, SENSOR_LANDSCAPE may stay pinned on some
+    // ROMs. Drive the flip ourselves from the accelerometer: an explicit
+    // single-landscape request is honored regardless of the rotation lock.
+    _accelSub = accelerometerEventStream().listen((e) {
+      if (e.x.abs() < 6 || e.y.abs() > 6) return;
+      final target =
+          e.x < 0 ? DeviceOrientation.landscapeLeft : DeviceOrientation.landscapeRight;
+      if (target == _appliedLandscape) {
+        _flipTimer?.cancel();
+        _flipTarget = null;
+        return;
+      }
+      if (target != _flipTarget) {
+        _flipTarget = target;
+        _flipTimer?.cancel();
+        _flipTimer = Timer(const Duration(milliseconds: 450), () {
+          if (!mounted || _flipTarget == null) return;
+          _appliedLandscape = _flipTarget;
+          SystemChrome.setPreferredOrientations([_flipTarget!]);
+        });
+      }
+    });
     gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
@@ -266,6 +293,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
     _uuKeyboardWorker?.dispose();
+    _accelSub?.cancel();
+    _flipTimer?.cancel();
     inputModel.keyboardInputAllowed = true;
     await gFFI.close();
     _timer?.cancel();

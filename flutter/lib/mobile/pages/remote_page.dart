@@ -109,6 +109,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Worker? _waylandKeyboardGateWorker;
   Worker? _uuKeyboardWorker;
+  bool _uuKeyboardWasOpen = false;
   bool _waylandKeyboardGateInitialized = false;
 
   InputModel get inputModel => gFFI.inputModel;
@@ -190,6 +191,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _uuKeyboardWorker = everAll([uuState.keyboardOpen, uuState.keyboardTab], (_) {
       if (mounted) setState(() {});
       _syncReserved();
+      // Reopening the sheet on the IME tab pops the system keyboard at once.
+      if (uuState.keyboardOpen.value &&
+          !_uuKeyboardWasOpen &&
+          uuState.keyboardTab.value == 0) {
+        openKeyboard();
+      }
+      _uuKeyboardWasOpen = uuState.keyboardOpen.value;
+      uuState.save();
     });
     gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
       gFFI.recordingModel
@@ -627,9 +636,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                           ),
                                   ),
                                   const UuFloatingKeysOverlay(),
-                                  // Tapping outside the sheet equals Back:
-                                  // close it instead of clicking the remote.
-                                  Obx(() => uuState.keyboardOpen.value
+                                  // Tapping outside the sheet equals Back,
+                                  // except on the IME tab where stray taps
+                                  // must not dismiss the system keyboard.
+                                  Obx(() => uuState.keyboardOpen.value &&
+                                          uuState.keyboardTab.value != 0
                                       ? Positioned.fill(
                                           child: GestureDetector(
                                             behavior: HitTestBehavior.opaque,

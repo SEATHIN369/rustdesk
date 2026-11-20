@@ -176,6 +176,7 @@ class UuState {
           active = decoded['active']?.toString() ?? '';
           railX = (decoded['railX'] as num?)?.toDouble() ?? 0.97;
           railY = (decoded['railY'] as num?)?.toDouble() ?? 0.5;
+          keyboardTab.value = (decoded['tab'] as num?)?.toInt() ?? 2;
         }
       }
     } catch (_) {}
@@ -193,6 +194,7 @@ class UuState {
         'schemes': schemes.map((e) => e.toJson()).toList(),
         'railX': railX,
         'railY': railY,
+        'tab': keyboardTab.value,
       }),
     );
   }
@@ -200,7 +202,6 @@ class UuState {
   void resetSessionUi() {
     railOpen.value = false;
     keyboardOpen.value = false;
-    keyboardTab.value = 2;
     drawerPage.value = null;
     editLayout.value = false;
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -55,6 +57,12 @@ class UuFloatingKeysOverlay extends StatefulWidget {
 class _UuFloatingKeysOverlayState extends State<UuFloatingKeysOverlay> {
   List<UuFloatingKey>? _snapshot;
   Worker? _editWorker;
+  Timer? _fadeTimer;
+  bool _faded = false;
+  UuFloatingKey? _dragKey;
+  Offset _dragStart = Offset.zero;
+  Offset _dragOrigin = Offset.zero;
+  bool _dragMoved = false;
 
   @override
   void initState() {
@@ -66,12 +74,23 @@ class _UuFloatingKeysOverlayState extends State<UuFloatingKeysOverlay> {
             .toList();
       }
     });
+    _poke();
   }
 
   @override
   void dispose() {
     _editWorker?.dispose();
+    _fadeTimer?.cancel();
     super.dispose();
+  }
+
+  // Same idle fade as the tool ball: dim after 4s, restore on touch.
+  void _poke() {
+    _fadeTimer?.cancel();
+    if (_faded) setState(() => _faded = false);
+    _fadeTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _faded = true);
+    });
   }
 
   void _pressDown(UuFloatingKey key) {
@@ -106,28 +125,28 @@ class _UuFloatingKeysOverlayState extends State<UuFloatingKeysOverlay> {
 
   Widget _keyWidget(
       UuFloatingKey key, UuScheme scheme, bool edit, Size screen) {
-    final diameter = 56 * scheme.keyScale;
+    final diameter = 48 * scheme.keyScale;
     final left = (key.x * screen.width - diameter / 2)
         .clamp(0.0, screen.width - diameter);
     final top = (key.y * screen.height - diameter / 2)
         .clamp(0.0, screen.height - diameter);
+    // Same look as the idle tool ball: plain black circle, white label.
     final ball = Container(
       width: diameter,
       height: diameter,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: Colors.black.withOpacity(scheme.opacity),
-        border: Border.all(
-          color: edit ? MyTheme.accent : Colors.white.withOpacity(0.35),
-          width: edit ? 2 : 1,
-        ),
+        color: Colors.black.withOpacity(0.55),
+        border: edit
+            ? Border.all(color: MyTheme.accent, width: 2)
+            : null,
       ),
       child: Center(
         child: Text(
           key.label,
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: Colors.white.withOpacity(0.9),
+            color: Colors.white,
             fontSize: 12 * scheme.keyScale,
           ),
         ),
@@ -169,11 +188,52 @@ class _UuFloatingKeysOverlayState extends State<UuFloatingKeysOverlay> {
         ),
       );
     } else {
+      // Tap = press the key; dragging past the threshold repositions the
+      // ball instead (same draggable design as the tool ball).
       child = Listener(
-        onPointerDown: (_) => _pressDown(key),
-        onPointerUp: (_) => _pressUp(key),
-        onPointerCancel: (_) => _pressUp(key),
-        child: ball,
+        onPointerDown: (e) {
+          _poke();
+          _dragKey = key;
+          _dragStart = e.position;
+          _dragOrigin = Offset(key.x, key.y);
+          _dragMoved = false;
+          if (key.isModifier) _pressDown(key);
+        },
+        onPointerMove: (e) {
+          if (_dragKey != key) return;
+          final d = e.position - _dragStart;
+          if (!_dragMoved && d.distance > 10) {
+            _dragMoved = true;
+            _pressUp(key);
+          }
+          if (_dragMoved) {
+            setState(() {
+              key.x = (_dragOrigin.dx + d.dx / screen.width).clamp(0.0, 1.0);
+              key.y = (_dragOrigin.dy + d.dy / screen.height).clamp(0.0, 1.0);
+            });
+          }
+        },
+        onPointerUp: (_) {
+          if (_dragKey != key) return;
+          _dragKey = null;
+          if (_dragMoved) {
+            uuState.save();
+            _poke();
+          } else {
+            if (!key.isModifier) _pressDown(key);
+            _pressUp(key);
+          }
+        },
+        onPointerCancel: (_) {
+          if (_dragKey != key) return;
+          _dragKey = null;
+          _pressUp(key);
+        },
+        child: AnimatedOpacity(
+          opacity: _faded ? 0.15 : 0.55,
+          duration: const Duration(milliseconds: 600),
+          child: ball,
+        ),
       );
     }
     return Positioned(left: left, top: top, child: child);

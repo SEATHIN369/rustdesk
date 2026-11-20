@@ -504,7 +504,7 @@ class _RawTouchGestureDetectorRegionState
         // Keep the dead zone small so the wheel engages within a few pixels.
         if (_twoFingerScaleDrift >= 0.06) {
           _twoFingerMode = allowPinch ? 2 : 0;
-        } else if (_twoFingerDrift.distance >= 6) {
+        } else if (_twoFingerDrift.distance >= 3) {
           _twoFingerMode =
               _twoFingerDrift.dy.abs() > _twoFingerDrift.dx.abs() * 1.2
                   ? 1

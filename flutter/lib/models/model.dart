@@ -2035,7 +2035,8 @@ class ImageModel with ChangeNotifier {
     final size = parent.target!.canvasModel.getSize();
     final xscale = size.width / _image!.width;
     final yscale = size.height / _image!.height;
-    return min(xscale, yscale) / 1.5;
+    // Never zoom out below "fill the screen": no letterboxing bands.
+    return max(xscale, yscale);
   }
 
   updateUserTextureRender() {
@@ -2173,7 +2174,13 @@ class ViewStyle {
           displayHeight != 0) {
         final s1 = width / displayWidth;
         final s2 = height / displayHeight;
-        s = s1 < s2 ? s1 : s2;
+        // Mobile fills the screen instead of letterboxing: crop the sides
+        // rather than leave blank bands above and below.
+        if (isMobile && !isWebDesktop) {
+          s = s1 > s2 ? s1 : s2;
+        } else {
+          s = s1 < s2 ? s1 : s2;
+        }
       }
     } else if (style == kRemoteViewStyleCustom) {
       // Custom scale is session-scoped and applied in CanvasModel.updateViewStyle()
@@ -2312,14 +2319,15 @@ class CanvasModel with ChangeNotifier {
     final dw = getDisplayWidth().toDouble();
     final dh = getDisplayHeight().toDouble();
     if (dw <= 0 || dh <= 0 || size.width <= 0 || size.height <= 0) return;
-    final fit = min(size.width / dw, size.height / dh);
+    final cover = max(size.width / dw, size.height / dh);
     final oneToOne = kIgnoreDpi ? 1.0 / _devicePixelRatio : 1.0;
     var snappedScale = _scale;
-    if (fit.isFinite && fit > 0 && (_scale - fit).abs() <= fit * 0.04) {
-      snappedScale = fit;
+    if (cover.isFinite && cover > 0 && (_scale - cover).abs() <= cover * 0.04) {
+      snappedScale = cover;
     } else if ((_scale - oneToOne).abs() <= oneToOne * 0.04) {
       snappedScale = oneToOne;
     }
+    if (snappedScale < cover) snappedScale = cover;
     if (snappedScale != _scale) {
       final factor = snappedScale / _scale;
       final cx = size.width / 2;
@@ -2333,6 +2341,22 @@ class CanvasModel with ChangeNotifier {
     _y = _snapAxis(_y, dh * _scale, size.height, tolerance);
     isMobileCanvasChanged = true;
     notifyListeners();
+  }
+
+  // Keeps the canvas covering the viewport: no blank bands on any edge.
+  void _clampOffsetToViewport() {
+    final dw = getDisplayWidth() * _scale;
+    final dh = getDisplayHeight() * _scale;
+    if (dw >= size.width) {
+      _x = _x.clamp(size.width - dw, 0.0).toDouble();
+    } else {
+      _x = (size.width - dw) / 2;
+    }
+    if (dh >= size.height) {
+      _y = _y.clamp(size.height - dh, 0.0).toDouble();
+    } else {
+      _y = (size.height - dh) / 2;
+    }
   }
 
   double _snapAxis(double offset, double content, double viewport,
@@ -2732,6 +2756,7 @@ class CanvasModel with ChangeNotifier {
   panX(double dx) {
     _x += dx;
     if (isMobile) {
+      _clampOffsetToViewport();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2749,6 +2774,7 @@ class CanvasModel with ChangeNotifier {
   panY(double dy) {
     _y += dy;
     if (isMobile) {
+      _clampOffsetToViewport();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2771,6 +2797,7 @@ class CanvasModel with ChangeNotifier {
     // _y_2 = focalPoint.dy - adjust - (focalPoint.dy - _y_1 - adjust) / s1 * s2
     _y = focalPoint.dy - adjust - (focalPoint.dy - _y - adjust) / s * _scale;
     if (isMobile) {
+      _clampOffsetToViewport();
       isMobileCanvasChanged = true;
     }
     notifyListeners();

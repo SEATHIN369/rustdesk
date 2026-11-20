@@ -20,6 +20,9 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.KeyEvent
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.media.MediaCodecInfo
 import android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
@@ -77,7 +80,49 @@ class MainActivity : FlutterActivity() {
     private val documentPicker by lazy { DocumentPicker(this) }
 
     private var isAudioStart = false
+    private var immersiveRequested = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
+
+    // Flutter's immersiveSticky is not honored on every OEM/Android combination,
+    // so the remote session hides the system bars through the window directly and
+    // re-applies them whenever the window regains focus.
+    private fun applyImmersive(enable: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val controller = window.insetsController ?: return
+            if (enable) {
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsets.Type.systemBars())
+            } else {
+                controller.show(WindowInsets.Type.systemBars())
+                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_DEFAULT
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = if (enable) {
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            } else {
+                View.SYSTEM_UI_FLAG_VISIBLE
+            }
+        }
+    }
+
+    private fun setWindowImmersive(enable: Boolean) {
+        immersiveRequested = enable
+        runOnUiThread { applyImmersive(enable) }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && immersiveRequested) {
+            applyImmersive(true)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -307,6 +352,10 @@ class MainActivity : FlutterActivity() {
                     } ?: let {
                         result.success(false)
                     }
+                }
+                "set_immersive" -> {
+                    setWindowImmersive(call.arguments == true)
+                    result.success(null)
                 }
                 "stop_service" -> {
                     Log.d(logTag, "Stop service")

@@ -93,6 +93,12 @@ class _RawTouchGestureDetectorRegionState
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
   bool _twoFingerCanvasChanged = false;
+  // Locks a two-finger gesture to one intent so a scroll does not turn into a
+  // canvas pan/zoom when the fingers drift sideways or slightly apart.
+  // 0 = undecided (dead zone), 1 = scroll, 2 = canvas pan/zoom.
+  int _twoFingerMode = 0;
+  Offset _twoFingerDrift = Offset.zero;
+  double _twoFingerScaleDrift = 0;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -452,6 +458,9 @@ class _RawTouchGestureDetectorRegionState
     _lastTapDownDetails = null;
     _twoFingerCanvasChanged = false;
     _mouseScrollIntegral = 0;
+    _twoFingerMode = 0;
+    _twoFingerDrift = Offset.zero;
+    _twoFingerScaleDrift = 0;
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -475,23 +484,44 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
 
-    // Two-finger vertical swipe scrolls the remote side; pinch still zooms and
-    // horizontal moves still pan the canvas. Three fingers are left to the OS.
-    if (!isDesktop &&
+    // Two-finger vertical swipe scrolls the remote side; pinch zooms and
+    // horizontal moves pan the canvas. Three fingers are left to the OS.
+    final useTwoFingerScroll = !isDesktop &&
         !isWebDesktop &&
         !widget.isCamera &&
-        !ffi.ffiModel.isPeerAndroid &&
-        (d.scale - 1).abs() <= 0.02 &&
-        d.focalPointDelta.dy.abs() > d.focalPointDelta.dx.abs()) {
-      _mouseScrollIntegral += d.focalPointDelta.dy / 4;
-      if (_mouseScrollIntegral > 1) {
-        inputModel.scroll(1);
-        _mouseScrollIntegral = 0;
-      } else if (_mouseScrollIntegral < -1) {
-        inputModel.scroll(-1);
-        _mouseScrollIntegral = 0;
+        !ffi.ffiModel.isPeerAndroid;
+    if (useTwoFingerScroll) {
+      if (_twoFingerMode == 0) {
+        _twoFingerDrift += d.focalPointDelta;
+        final scaleDrift = (d.scale - 1).abs();
+        if (scaleDrift > _twoFingerScaleDrift) {
+          _twoFingerScaleDrift = scaleDrift;
+        }
+        // Hold off until the intent is unambiguous: a scroll that starts
+        // slightly diagonal or with a bit of finger drift must stay a scroll.
+        if (_twoFingerScaleDrift >= 0.06) {
+          _twoFingerMode = 2;
+        } else if (_twoFingerDrift.distance >= 14) {
+          _twoFingerMode =
+              _twoFingerDrift.dy.abs() > _twoFingerDrift.dx.abs() * 1.2
+                  ? 1
+                  : 2;
+        }
       }
-      return;
+      if (_twoFingerMode == 1) {
+        _mouseScrollIntegral += d.focalPointDelta.dy / 4;
+        if (_mouseScrollIntegral > 1) {
+          inputModel.scroll(1);
+          _mouseScrollIntegral = 0;
+        } else if (_mouseScrollIntegral < -1) {
+          inputModel.scroll(-1);
+          _mouseScrollIntegral = 0;
+        }
+        return;
+      }
+      if (_twoFingerMode == 0) {
+        return;
+      }
     }
 
     if (canvasLocked) return;
@@ -534,6 +564,7 @@ class _RawTouchGestureDetectorRegionState
     } else {
       // mobile
       _scale = 1;
+      _twoFingerMode = 0;
       if (_twoFingerCanvasChanged) {
         _twoFingerCanvasChanged = false;
         ffi.canvasModel.snapCanvas();

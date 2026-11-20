@@ -25,6 +25,7 @@ import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
+import 'shortcut_pad.dart';
 
 final initText = '1' * 1024;
 
@@ -119,6 +120,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     gFFI.dialogManager.loadMobileActionsOverlayVisible();
   }
 
+  // Flutter's immersiveSticky alone is not reliable on all OEM ROMs, so Android
+  // also hides the system bars natively while the session page is visible.
+  void _setImmersive(bool enable) {
+    if (isAndroid) {
+      gFFI.invokeMethod("set_immersive", enable);
+    }
+    if (enable) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+          overlays: SystemUiOverlay.values);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -131,7 +146,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _setImmersive(true);
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
@@ -212,8 +227,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _timer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-        overlays: SystemUiOverlay.values);
+    _setImmersive(false);
     WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
     removeSharedStates(widget.id);
@@ -285,7 +299,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   void onSoftKeyboardChanged(bool visible) {
     if (!visible) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _setImmersive(true);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
@@ -311,8 +325,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _iosKeyboardWorkaroundTimer = null;
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
+        _setImmersive(false);
         _mobileFocusNode.requestFocus();
       });
     }
@@ -475,8 +488,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       setState(() => _showEdit = true);
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
+        _setImmersive(false);
         _mobileFocusNode.requestFocus();
       });
     });
@@ -635,6 +647,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   icon: Icon(Icons.keyboard),
                                   onPressed: openKeyboard),
                               IconButton(
+                                  color: Colors.white,
+                                  icon: Icon(Icons.shortcut),
+                                  tooltip: translate('Keyboard shortcuts'),
+                                  onPressed: () =>
+                                      showMobileShortcutPad(context)),
+                              IconButton(
                                 color: Colors.white,
                                 icon: const Icon(Icons.build),
                                 onPressed: () => gFFI.dialogManager
@@ -646,6 +664,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   color: Colors.white,
                                   icon: Icon(Icons.keyboard),
                                   onPressed: openKeyboard),
+                              IconButton(
+                                  color: Colors.white,
+                                  icon: Icon(Icons.shortcut),
+                                  tooltip: translate('Keyboard shortcuts'),
+                                  onPressed: () =>
+                                      showMobileShortcutPad(context)),
                               IconButton(
                                 color: Colors.white,
                                 icon: Icon(gFFI.ffiModel.touchMode

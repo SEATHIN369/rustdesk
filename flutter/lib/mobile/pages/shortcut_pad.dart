@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../common.dart';
 import '../../consts.dart';
@@ -176,6 +177,7 @@ class MobileShortcutPad extends StatefulWidget {
 class _MobileShortcutPadState extends State<MobileShortcutPad> {
   late List<ShortcutItem> _items;
   bool _editing = false;
+  String? _pressedId;
 
   bool get _isMac => gFFI.ffiModel.pi.platform == kPeerPlatformMacOS;
 
@@ -239,12 +241,19 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
             );
           }
           final item = _items[index - 1];
+          final pressed = _pressedId == item.id;
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () => _send(item),
+            onTapDown: (_) => setState(() => _pressedId = item.id),
+            onTapUp: (_) {
+              setState(() => _pressedId = null);
+              HapticFeedback.lightImpact();
+              _send(item);
+            },
+            onTapCancel: () => setState(() => _pressedId = null),
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF4A4D52),
+                color: pressed ? MyTheme.accent : const Color(0xFF4A4D52),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(

@@ -2035,8 +2035,9 @@ class ImageModel with ChangeNotifier {
     final size = parent.target!.canvasModel.getSize();
     final xscale = size.width / _image!.width;
     final yscale = size.height / _image!.height;
-    // Never zoom out below "fill the screen": no letterboxing bands.
-    return max(xscale, yscale);
+    // Never zoom out below "whole desktop visible" (fit); letterboxing is
+    // allowed, zooming past fit is not.
+    return min(xscale, yscale);
   }
 
   updateUserTextureRender() {
@@ -2174,13 +2175,7 @@ class ViewStyle {
           displayHeight != 0) {
         final s1 = width / displayWidth;
         final s2 = height / displayHeight;
-        // Mobile fills the screen instead of letterboxing: crop the sides
-        // rather than leave blank bands above and below.
-        if (isMobile && !isWebDesktop) {
-          s = s1 > s2 ? s1 : s2;
-        } else {
-          s = s1 < s2 ? s1 : s2;
-        }
+        s = s1 < s2 ? s1 : s2;
       }
     } else if (style == kRemoteViewStyleCustom) {
       // Custom scale is session-scoped and applied in CanvasModel.updateViewStyle()
@@ -2319,15 +2314,15 @@ class CanvasModel with ChangeNotifier {
     final dw = getDisplayWidth().toDouble();
     final dh = getDisplayHeight().toDouble();
     if (dw <= 0 || dh <= 0 || size.width <= 0 || size.height <= 0) return;
-    final cover = max(size.width / dw, size.height / dh);
+    final fit = min(size.width / dw, size.height / dh);
     final oneToOne = kIgnoreDpi ? 1.0 / _devicePixelRatio : 1.0;
     var snappedScale = _scale;
-    if (cover.isFinite && cover > 0 && (_scale - cover).abs() <= cover * 0.04) {
-      snappedScale = cover;
+    if (fit.isFinite && fit > 0 && (_scale - fit).abs() <= fit * 0.04) {
+      snappedScale = fit;
     } else if ((_scale - oneToOne).abs() <= oneToOne * 0.04) {
       snappedScale = oneToOne;
     }
-    if (snappedScale < cover) snappedScale = cover;
+    if (snappedScale < fit) snappedScale = fit;
     if (snappedScale != _scale) {
       final factor = snappedScale / _scale;
       final cx = size.width / 2;

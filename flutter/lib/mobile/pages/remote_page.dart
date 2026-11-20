@@ -154,6 +154,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _physicalFocusNode.requestFocus();
     HardwareKeyboard.instance.addHandler(_handleLocalKeyEvent);
     gFFI.inputModel.listenToMouse(true);
+    // Remote control on phones is used in landscape; keep the session page
+    // there instead of following the sensor while panning.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
@@ -228,6 +234,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     _setImmersive(false);
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
     removeSharedStates(widget.id);
@@ -524,9 +531,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     (keyboardIsVisible || _showGestureHelp)
                         ? Icons.expand_more
                         : Icons.expand_less,
-                    color: Colors.white,
+                    color: Colors.white.withOpacity(0.75),
+                    shadows: const [
+                      Shadow(color: Colors.black45, blurRadius: 6),
+                    ],
                   ),
-                  backgroundColor: MyTheme.accent,
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  highlightElevation: 0,
                   onPressed: () {
                     setState(() {
                       if (keyboardIsVisible) {

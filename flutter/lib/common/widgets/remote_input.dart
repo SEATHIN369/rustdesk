@@ -501,9 +501,10 @@ class _RawTouchGestureDetectorRegionState
         }
         // Hold off until the intent is unambiguous: a scroll that starts
         // slightly diagonal or with a bit of finger drift must stay a scroll.
+        // Keep the dead zone small so the wheel engages within a few pixels.
         if (_twoFingerScaleDrift >= 0.06) {
           _twoFingerMode = allowPinch ? 2 : 0;
-        } else if (_twoFingerDrift.distance >= 14) {
+        } else if (_twoFingerDrift.distance >= 6) {
           _twoFingerMode =
               _twoFingerDrift.dy.abs() > _twoFingerDrift.dx.abs() * 1.2
                   ? 1

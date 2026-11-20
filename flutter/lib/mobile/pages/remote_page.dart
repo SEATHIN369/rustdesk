@@ -627,6 +627,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                           ),
                                   ),
                                   const UuFloatingKeysOverlay(),
+                                  // Tapping outside the sheet equals Back:
+                                  // close it instead of clicking the remote.
+                                  Obx(() => uuState.keyboardOpen.value
+                                      ? Positioned.fill(
+                                          child: GestureDetector(
+                                            behavior: HitTestBehavior.opaque,
+                                            onTap: () {
+                                              uuState.keyboardOpen.value =
+                                                  false;
+                                              _hideIme();
+                                            },
+                                          ),
+                                        )
+                                      : const SizedBox.shrink()),
                                   UuChrome(
                                     id: widget.id,
                                     onToggleGestureHelp: () => setState(() =>

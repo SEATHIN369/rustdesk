@@ -206,12 +206,23 @@ class _UuChromeState extends State<UuChrome> {
       'schemes': '操控方案',
       'settings': '其他设置',
     };
-    return Positioned(
-      top: 0,
-      bottom: 0,
-      right: 0,
-      width: width,
-      child: Material(
+    return Stack(
+      children: [
+        // Tapping outside the drawer equals Back (one level up).
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              uuState.drawerPage.value = page == 'menu' ? null : 'menu';
+            },
+          ),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: width,
+          child: Material(
         color: const Color(0xF22C2C2E),
         child: SafeArea(
           child: Column(
@@ -247,7 +258,9 @@ class _UuChromeState extends State<UuChrome> {
             ],
           ),
         ),
-      ),
+          ),
+        ),
+      ],
     );
   }
 

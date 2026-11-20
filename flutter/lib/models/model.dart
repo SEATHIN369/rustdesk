@@ -2248,6 +2248,7 @@ class CanvasModel with ChangeNotifier {
   bool _locked = false;
   double _devicePixelRatio = 1.0;
   Size _size = Size.zero;
+  double _mobileBottomReserved = 0;
   // the tabbar over the image
   // double tabBarHeight = 0.0;
   // the window border's width
@@ -2338,6 +2339,31 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
+  // Bottom strip reserved by the UU-style keyboard sheet. The canvas re-fits
+  // into the remaining top area so the peer cursor stays visible above it.
+  void setMobileBottomReserved(double height) {
+    if (_mobileBottomReserved == height) return;
+    _mobileBottomReserved = height;
+    updateSize();
+    final dw = getDisplayWidth();
+    final dh = getDisplayHeight();
+    if (dw <= 0 || dh <= 0 || size.width <= 0 || size.height <= 0) return;
+    if (_lastViewStyle.style == kRemoteViewStyleAdaptive) {
+      _scale = ViewStyle(
+        style: _lastViewStyle.style,
+        width: size.width,
+        height: size.height,
+        displayWidth: dw,
+        displayHeight: dh,
+      ).scale;
+      _resetCanvasOffset(dw, dh);
+    } else {
+      _clampOffsetToViewport();
+    }
+    isMobileCanvasChanged = true;
+    notifyListeners();
+  }
+
   // Keeps the canvas covering the viewport: no blank bands on any edge.
   void _clampOffsetToViewport() {
     final dw = getDisplayWidth() * _scale;
@@ -2407,6 +2433,7 @@ class CanvasModel with ChangeNotifier {
       // bottom overlay (e.g. key-help tools) so the canvas is not covered.
       h = h -
           mediaData.viewInsets.bottom -
+          _mobileBottomReserved -
           (parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ??
               0);
     }

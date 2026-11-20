@@ -10,6 +10,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/models/uu_state.dart';
 
 import './gestures.dart';
 
@@ -491,6 +492,7 @@ class _RawTouchGestureDetectorRegionState
         !widget.isCamera &&
         !ffi.ffiModel.isPeerAndroid;
     if (useTwoFingerScroll) {
+      final allowPinch = uuState.active.pinchZoom;
       if (_twoFingerMode == 0) {
         _twoFingerDrift += d.focalPointDelta;
         final scaleDrift = (d.scale - 1).abs();
@@ -500,12 +502,12 @@ class _RawTouchGestureDetectorRegionState
         // Hold off until the intent is unambiguous: a scroll that starts
         // slightly diagonal or with a bit of finger drift must stay a scroll.
         if (_twoFingerScaleDrift >= 0.06) {
-          _twoFingerMode = 2;
+          _twoFingerMode = allowPinch ? 2 : 0;
         } else if (_twoFingerDrift.distance >= 14) {
           _twoFingerMode =
               _twoFingerDrift.dy.abs() > _twoFingerDrift.dx.abs() * 1.2
                   ? 1
-                  : 2;
+                  : (allowPinch ? 2 : 0);
         }
       }
       if (_twoFingerMode == 1) {
@@ -519,7 +521,10 @@ class _RawTouchGestureDetectorRegionState
         }
         return;
       }
-      if (_twoFingerMode == 0) {
+      if (_twoFingerMode != 2) {
+        return;
+      }
+      if (!allowPinch) {
         return;
       }
     }

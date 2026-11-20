@@ -22,10 +22,13 @@ import '../../models/input_model.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
+import '../../models/uu_state.dart';
 import '../../utils/image.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
-import 'shortcut_pad.dart';
+import 'uu_chrome.dart';
+import 'uu_floating_keys.dart';
+import 'uu_keyboard_sheet.dart';
 
 final initText = '1' * 1024;
 
@@ -90,7 +93,6 @@ class RemotePage extends StatefulWidget {
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
-  bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
@@ -106,6 +108,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   var _showEdit = false; // use soft keyboard
 
   Worker? _waylandKeyboardGateWorker;
+  Worker? _uuKeyboardWorker;
   bool _waylandKeyboardGateInitialized = false;
 
   InputModel get inputModel => gFFI.inputModel;
@@ -132,6 +135,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
           overlays: SystemUiOverlay.values);
     }
+  }
+
+  // Reserve the bottom strip taken by the UU keyboard sheet so the canvas
+  // re-fits above it and the peer cursor stays visible while typing.
+  void _syncReserved() {
+    if (!mounted) return;
+    final h = MediaQuery.of(context).size.height;
+    gFFI.canvasModel.setMobileBottomReserved(
+        uuState.keyboardOpen.value ? h * kUuKeyboardSheetFraction : 0);
   }
 
   @override
@@ -166,6 +178,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     gFFI.chatModel
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
+    uuState.load();
+    uuState.resetSessionUi();
+    _uuKeyboardWorker = ever(uuState.keyboardOpen, (_) {
+      if (mounted) setState(() {});
+      _syncReserved();
+    });
     gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
@@ -228,12 +246,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _physicalFocusNode.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
+    _uuKeyboardWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
     await gFFI.close();
     _timer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     _setImmersive(false);
+    gFFI.canvasModel.setMobileBottomReserved(0);
+    uuState.resetSessionUi();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
@@ -501,17 +522,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     });
   }
 
-  Widget _bottomWidget() => _showGestureHelp
-      ? getGestureHelp()
-      : (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
-          ? getBottomAppBar()
-          : Offstage());
+  Widget _bottomWidget() =>
+      _showGestureHelp ? getGestureHelp() : Offstage();
 
   @override
   Widget build(BuildContext context) {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
 
     return WillPopScope(
       onWillPop: () async {
@@ -519,18 +536,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         return false;
       },
       child: Scaffold(
-          // workaround for https://github.com/rustdesk/rustdesk/issues/3131
-          floatingActionButtonLocation: keyboardIsVisible
-              ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
-              : null,
-          floatingActionButton: !showActionButton
+          floatingActionButton: !keyboardIsVisible
               ? null
               : FloatingActionButton(
-                  mini: !keyboardIsVisible,
+                  mini: false,
                   child: Icon(
-                    (keyboardIsVisible || _showGestureHelp)
-                        ? Icons.expand_more
-                        : Icons.expand_less,
+                    Icons.expand_more,
                     color: Colors.white.withOpacity(0.75),
                     shadows: const [
                       Shadow(color: Colors.black45, blurRadius: 6),
@@ -541,16 +552,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   highlightElevation: 0,
                   onPressed: () {
                     setState(() {
-                      if (keyboardIsVisible) {
-                        _showEdit = false;
-                        gFFI.invokeMethod("enable_soft_keyboard", false);
-                        _mobileFocusNode.unfocus();
-                        _physicalFocusNode.requestFocus();
-                      } else if (_showGestureHelp) {
-                        _showGestureHelp = false;
-                      } else {
-                        _showBar = !_showBar;
-                      }
+                      _showEdit = false;
+                      gFFI.invokeMethod("enable_soft_keyboard", false);
+                      _mobileFocusNode.unfocus();
+                      _physicalFocusNode.requestFocus();
                     });
                   }),
           bottomNavigationBar: Obx(() => Stack(
@@ -583,17 +588,45 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   gFFI.dialogManager
                                       .resetMobileActionsOverlay(ffi: gFFI);
                                   _currentOrientation = orientation;
+                                  _syncReserved();
                                   gFFI.canvasModel.updateViewStyle();
                                 });
                               }
                               return Container(
                                 color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
+                                child: Stack(children: [
+                                  Positioned.fill(
+                                    child: inputModel.isPhysicalMouse.value
+                                        ? getBodyForMobile()
+                                        : RawTouchGestureDetectorRegion(
+                                            child: getBodyForMobile(),
+                                            ffi: gFFI,
+                                          ),
+                                  ),
+                                  const UuFloatingKeysOverlay(),
+                                  UuChrome(
+                                    id: widget.id,
+                                    onToggleGestureHelp: () => setState(() =>
+                                        _showGestureHelp = !_showGestureHelp),
+                                    onShowActions: () => showActions(widget.id),
+                                  ),
+                                  Obx(() => uuState.keyboardOpen.value
+                                      ? Positioned(
+                                          left: 0,
+                                          right: 0,
+                                          bottom: 0,
+                                          child: UuKeyboardSheet(
+                                            onClose: () => uuState
+                                                .keyboardOpen.value = false,
+                                            onOpenIme: () {
+                                              uuState.keyboardOpen.value =
+                                                  false;
+                                              openKeyboard();
+                                            },
+                                          ),
+                                        )
+                                      : const SizedBox.shrink()),
+                                ]),
                               );
                             }),
                   );
@@ -620,117 +653,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               inputModel: inputModel,
               child: child)
           : child,
-    );
-  }
-
-  Widget getBottomAppBar() {
-    final ffiModel = Provider.of<FfiModel>(context);
-    return BottomAppBar(
-      elevation: 10,
-      color: MyTheme.accent,
-      child: Row(
-        mainAxisSize: MainAxisSize.max,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          Row(
-              children: <Widget>[
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.clear),
-                      onPressed: () {
-                        clientClose(sessionId, gFFI);
-                      },
-                    ),
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.tv),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showOptions(context, widget.id, gFFI.dialogManager);
-                      },
-                    )
-                  ] +
-                  (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
-                      ? []
-                      : gFFI.ffiModel.isPeerAndroid
-                          ? [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.shortcut),
-                                  tooltip: translate('Keyboard shortcuts'),
-                                  onPressed: () =>
-                                      showMobileShortcutPad(context)),
-                              IconButton(
-                                color: Colors.white,
-                                icon: const Icon(Icons.build),
-                                onPressed: () => gFFI.dialogManager
-                                    .toggleMobileActionsOverlay(ffi: gFFI),
-                              )
-                            ]
-                          : [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.shortcut),
-                                  tooltip: translate('Keyboard shortcuts'),
-                                  onPressed: () =>
-                                      showMobileShortcutPad(context)),
-                              IconButton(
-                                color: Colors.white,
-                                icon: Icon(gFFI.ffiModel.touchMode
-                                    ? Icons.touch_app
-                                    : Icons.mouse),
-                                onPressed: () => setState(
-                                    () => _showGestureHelp = !_showGestureHelp),
-                              ),
-                            ]) +
-                  (isWeb
-                      ? []
-                      : <Widget>[
-                          futureBuilder(
-                              future: gFFI.invokeMethod(
-                                  "get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
-                              hasData: (isSupportVoiceCall) => IconButton(
-                                    color: Colors.white,
-                                    icon: isAndroid && isSupportVoiceCall
-                                        ? SvgPicture.asset('assets/chat.svg',
-                                            colorFilter: ColorFilter.mode(
-                                                Colors.white, BlendMode.srcIn))
-                                        : Icon(Icons.message),
-                                    onPressed: () =>
-                                        isAndroid && isSupportVoiceCall
-                                            ? showChatOptions(widget.id)
-                                            : onPressedTextChat(widget.id),
-                                  ))
-                        ]) +
-                  [
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.more_vert),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showActions(widget.id);
-                      },
-                    ),
-                  ]),
-          Obx(() => IconButton(
-                color: Colors.white,
-                icon: Icon(Icons.expand_more),
-                onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
-                    ? null
-                    : () {
-                        setState(() => _showBar = !_showBar);
-                      },
-              )),
-        ],
-      ),
     );
   }
 
@@ -1614,18 +1536,5 @@ void sendPrompt(bool isMac, String key) {
     gFFI.inputModel.command = old;
   } else {
     gFFI.inputModel.ctrl = old;
-  }
-}
-
-class FABLocation extends FloatingActionButtonLocation {
-  FloatingActionButtonLocation location;
-  double offsetX;
-  double offsetY;
-  FABLocation(this.location, this.offsetX, this.offsetY);
-
-  @override
-  Offset getOffset(ScaffoldPrelayoutGeometry scaffoldGeometry) {
-    final offset = location.getOffset(scaffoldGeometry);
-    return Offset(offset.dx + offsetX, offset.dy + offsetY);
   }
 }

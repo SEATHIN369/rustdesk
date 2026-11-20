@@ -8,15 +8,6 @@ import '../../models/platform_model.dart';
 
 const String _kShortcutPadOption = 'shortcut-pad-items';
 
-void showMobileShortcutPad(BuildContext context) {
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: const Color(0xFF1F1F1F),
-    builder: (_) => const MobileShortcutPad(),
-  );
-}
-
 class ShortcutItem {
   final String id;
   final String key;
@@ -25,6 +16,7 @@ class ShortcutItem {
   final bool shift;
   final bool meta;
   final bool primary;
+  final String desc;
 
   const ShortcutItem(
     this.id,
@@ -34,6 +26,7 @@ class ShortcutItem {
     this.shift = false,
     this.meta = false,
     this.primary = false,
+    this.desc = '',
   });
 
   String label(bool isMac) {
@@ -55,6 +48,7 @@ class ShortcutItem {
         'shift': shift,
         'meta': meta,
         'primary': primary,
+        'desc': desc,
       };
 
   factory ShortcutItem.fromJson(Map<String, dynamic> json) => ShortcutItem(
@@ -66,6 +60,7 @@ class ShortcutItem {
         shift: json['shift'] == true,
         meta: json['meta'] == true,
         primary: json['primary'] == true,
+        desc: json['desc']?.toString() ?? '',
       );
 
   ShortcutItem copyWith({String? id}) => ShortcutItem(
@@ -76,6 +71,7 @@ class ShortcutItem {
         shift: shift,
         meta: meta,
         primary: primary,
+        desc: desc,
       );
 }
 
@@ -100,38 +96,38 @@ String _keyLabel(String key) {
 }
 
 const List<ShortcutItem> _defaults = [
-  ShortcutItem('d01', 'VK_C', primary: true),
-  ShortcutItem('d02', 'VK_V', primary: true),
-  ShortcutItem('d03', 'VK_X', primary: true),
-  ShortcutItem('d04', 'VK_Z', primary: true),
-  ShortcutItem('d05', 'VK_Y', primary: true),
-  ShortcutItem('d06', 'VK_A', primary: true),
-  ShortcutItem('d07', 'VK_S', primary: true),
-  ShortcutItem('d08', 'VK_F', primary: true),
-  ShortcutItem('d09', 'VK_B', primary: true),
-  ShortcutItem('d10', 'VK_I', primary: true),
-  ShortcutItem('d11', 'VK_U', primary: true),
-  ShortcutItem('d12', 'VK_T', primary: true),
-  ShortcutItem('d13', 'VK_W', primary: true),
-  ShortcutItem('d14', 'VK_TAB', alt: true),
-  ShortcutItem('d15', 'VK_F4', alt: true),
-  ShortcutItem('d16', 'VK_ESCAPE', ctrl: true, shift: true),
-  ShortcutItem('d17', 'VK_ESCAPE'),
-  ShortcutItem('d18', 'VK_TAB'),
-  ShortcutItem('d19', 'VK_RETURN'),
-  ShortcutItem('d20', 'VK_BACK'),
-  ShortcutItem('d21', 'VK_DELETE'),
-  ShortcutItem('d22', 'VK_F2'),
-  ShortcutItem('d23', 'VK_F5'),
-  ShortcutItem('d24', 'VK_F11'),
-  ShortcutItem('d25', 'VK_LEFT'),
-  ShortcutItem('d26', 'VK_UP'),
-  ShortcutItem('d27', 'VK_DOWN'),
-  ShortcutItem('d28', 'VK_RIGHT'),
-  ShortcutItem('d29', 'VK_HOME'),
-  ShortcutItem('d30', 'VK_END'),
-  ShortcutItem('d31', 'VK_PAGEUP'),
-  ShortcutItem('d32', 'VK_PAGEDOWN'),
+  ShortcutItem('d01', 'VK_C', primary: true, desc: '复制'),
+  ShortcutItem('d02', 'VK_V', primary: true, desc: '粘贴'),
+  ShortcutItem('d03', 'VK_X', primary: true, desc: '剪切'),
+  ShortcutItem('d04', 'VK_Z', primary: true, desc: '撤销'),
+  ShortcutItem('d05', 'VK_Y', primary: true, desc: '重做'),
+  ShortcutItem('d06', 'VK_A', primary: true, desc: '全选'),
+  ShortcutItem('d07', 'VK_S', primary: true, desc: '保存'),
+  ShortcutItem('d08', 'VK_F', primary: true, desc: '查找'),
+  ShortcutItem('d09', 'VK_B', primary: true, desc: '加粗'),
+  ShortcutItem('d10', 'VK_I', primary: true, desc: '斜体'),
+  ShortcutItem('d11', 'VK_U', primary: true, desc: '下划线'),
+  ShortcutItem('d12', 'VK_T', primary: true, desc: '新标签'),
+  ShortcutItem('d13', 'VK_W', primary: true, desc: '关标签'),
+  ShortcutItem('d14', 'VK_TAB', alt: true, desc: '切换窗口'),
+  ShortcutItem('d15', 'VK_F4', alt: true, desc: '关闭窗口'),
+  ShortcutItem('d16', 'VK_ESCAPE', ctrl: true, shift: true, desc: '任务管理'),
+  ShortcutItem('d17', 'VK_ESCAPE', desc: '退出'),
+  ShortcutItem('d18', 'VK_TAB', desc: '切焦点'),
+  ShortcutItem('d19', 'VK_RETURN', desc: '确认'),
+  ShortcutItem('d20', 'VK_BACK', desc: '退格'),
+  ShortcutItem('d21', 'VK_DELETE', desc: '删除'),
+  ShortcutItem('d22', 'VK_F2', desc: '重命名'),
+  ShortcutItem('d23', 'VK_F5', desc: '刷新'),
+  ShortcutItem('d24', 'VK_F11', desc: '全屏'),
+  ShortcutItem('d25', 'VK_LEFT', desc: '左'),
+  ShortcutItem('d26', 'VK_UP', desc: '上'),
+  ShortcutItem('d27', 'VK_DOWN', desc: '下'),
+  ShortcutItem('d28', 'VK_RIGHT', desc: '右'),
+  ShortcutItem('d29', 'VK_HOME', desc: '行首'),
+  ShortcutItem('d30', 'VK_END', desc: '行尾'),
+  ShortcutItem('d31', 'VK_PAGEUP', desc: '上页'),
+  ShortcutItem('d32', 'VK_PAGEDOWN', desc: '下页'),
 ];
 
 const List<String> _pickerKeys = [
@@ -171,7 +167,9 @@ Future<void> _saveItems(List<ShortcutItem> items) async {
 }
 
 class MobileShortcutPad extends StatefulWidget {
-  const MobileShortcutPad({Key? key}) : super(key: key);
+  final bool embedded;
+
+  const MobileShortcutPad({Key? key, this.embedded = false}) : super(key: key);
 
   @override
   State<MobileShortcutPad> createState() => _MobileShortcutPadState();
@@ -216,13 +214,16 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
   Widget _header() {
     return Row(
       children: [
-        const Expanded(
-          child: Text('快捷键',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600)),
-        ),
+        if (widget.embedded)
+          const Spacer()
+        else
+          const Expanded(
+            child: Text('快捷键',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600)),
+          ),
         Text(
           _editing ? '拖动排序，垃圾桶删除' : '点击发送',
           style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
@@ -286,8 +287,18 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
                     minimumSize: const Size(0, 36),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child:
-                      Text(item.label(_isMac), style: const TextStyle(fontSize: 13)),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(item.label(_isMac),
+                          style: const TextStyle(fontSize: 13)),
+                      if (item.desc.isNotEmpty)
+                        Text(item.desc,
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.white.withOpacity(0.55))),
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -452,34 +463,37 @@ class _MobileShortcutPadState extends State<MobileShortcutPad> {
 
   @override
   Widget build(BuildContext context) {
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!widget.embedded)
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+          _header(),
+          const SizedBox(height: 4),
+          Flexible(
+            child: _editing ? _editBody(context) : _viewBody(),
+          ),
+        ],
+      ),
+    );
+    if (widget.embedded) return content;
     return SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(
             maxHeight: MediaQuery.of(context).size.height * 0.7),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 8),
-                  decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.3),
-                      borderRadius: BorderRadius.circular(2)),
-                ),
-              ),
-              _header(),
-              const SizedBox(height: 4),
-              Flexible(
-                child: _editing ? _editBody(context) : _viewBody(),
-              ),
-            ],
-          ),
-        ),
+        child: content,
       ),
     );
   }

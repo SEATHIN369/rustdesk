@@ -131,7 +131,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
@@ -285,7 +285,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   void onSoftKeyboardChanged(bool visible) {
     if (!visible) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
@@ -553,9 +553,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     color: kColorCanvas,
                     child: isWebDesktop
                         ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
+                        : OrientationBuilder(builder: (ctx, orientation) {
                               if (_currentOrientation != orientation) {
                                 Timer(const Duration(milliseconds: 200), () {
                                   gFFI.dialogManager
@@ -574,7 +572,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                       ),
                               );
                             }),
-                          ),
                   );
                 })
               ],

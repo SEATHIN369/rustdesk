@@ -50,14 +50,16 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
       } else if (d.pointerCount == 2 &&
           _currentState != GestureState.twoFingerScale) {
         onTwoFingerStartDebounce(d);
-      } else if (d.pointerCount == 3 &&
-          _currentState != GestureState.threeFingerVerticalDrag) {
-        _currentState = GestureState.threeFingerVerticalDrag;
-        if (onThreeFingerVerticalDragStart != null) {
+      } else if (d.pointerCount >= 3) {
+        if (onThreeFingerVerticalDragStart == null) {
+          // Let the OS handle multi-finger gestures (e.g. three-finger screenshot).
+          _currentState = GestureState.none;
+        } else if (_currentState != GestureState.threeFingerVerticalDrag) {
+          _currentState = GestureState.threeFingerVerticalDrag;
           onThreeFingerVerticalDragStart!(
               DragStartDetails(globalPosition: d.localFocalPoint));
+          debugPrint("start threeFingerScale");
         }
-        debugPrint("start threeFingerScale");
       }
       if (_currentState != GestureState.none) {
         switch (_currentState) {

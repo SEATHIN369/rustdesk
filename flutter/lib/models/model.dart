@@ -2305,6 +2305,45 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
+  // Snap scale to fit/1:1 and position to edges after a pinch gesture,
+  // so the canvas does not stay slightly off-center or slightly zoomed.
+  void snapCanvas() {
+    updateSize();
+    final dw = getDisplayWidth().toDouble();
+    final dh = getDisplayHeight().toDouble();
+    if (dw <= 0 || dh <= 0 || size.width <= 0 || size.height <= 0) return;
+    final fit = min(size.width / dw, size.height / dh);
+    final oneToOne = kIgnoreDpi ? 1.0 / _devicePixelRatio : 1.0;
+    var snappedScale = _scale;
+    if (fit.isFinite && fit > 0 && (_scale - fit).abs() <= fit * 0.04) {
+      snappedScale = fit;
+    } else if ((_scale - oneToOne).abs() <= oneToOne * 0.04) {
+      snappedScale = oneToOne;
+    }
+    if (snappedScale != _scale) {
+      final factor = snappedScale / _scale;
+      final cx = size.width / 2;
+      final cy = size.height / 2;
+      _x = cx - (cx - _x) * factor;
+      _y = cy - (cy - _y) * factor;
+      _scale = snappedScale;
+    }
+    const tolerance = 24.0;
+    _x = _snapAxis(_x, dw * _scale, size.width, tolerance);
+    _y = _snapAxis(_y, dh * _scale, size.height, tolerance);
+    isMobileCanvasChanged = true;
+    notifyListeners();
+  }
+
+  double _snapAxis(double offset, double content, double viewport,
+      double tolerance) {
+    if (content <= viewport) return (viewport - content) / 2;
+    final end = viewport - content;
+    if (offset.abs() <= tolerance) return 0;
+    if ((offset - end).abs() <= tolerance) return end;
+    return offset.clamp(end, 0.0).toDouble();
+  }
+
   _resetScroll() => setScrollPercent(0.0, 0.0);
 
   void setScrollPercent(double x, double y) {
@@ -2351,24 +2390,6 @@ class CanvasModel with ChangeNotifier {
           mediaData.viewInsets.bottom -
           (parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ??
               0);
-      // Orientation-specific handling:
-      //  - Portrait: additionally subtract top padding (e.g. status bar / notch)
-      //  - Landscape: does not subtract mediaData.padding.top/bottom (home indicator auto-hides)
-      final isPortrait = size.height > size.width;
-      if (isPortrait) {
-        // In portrait mode, subtract the top safe-area padding (e.g. status bar / notch)
-        // so the remote image is not truncated, while keeping the bottom inset to avoid
-        // introducing unnecessary blank space around the canvas.
-        //
-        // iOS -> Android, portrait, adjust mode:
-        // h = h (no padding subtracted): top and bottom are truncated
-        //   https://github.com/user-attachments/assets/30ed4559-c27e-432b-847f-8fec23c9f998
-        // h = h - top - bottom: extra blank spaces appear
-        //   https://github.com/user-attachments/assets/12a98817-3b4e-43aa-be0f-4b03cf364b7e
-        // h = h - top (current): works fine
-        //   https://github.com/user-attachments/assets/95f047f2-7f47-4a36-8113-5023989a0c81
-        h = h - mediaData.padding.top;
-      }
     }
     return Size(w < 0 ? 0 : w, h < 0 ? 0 : h);
   }

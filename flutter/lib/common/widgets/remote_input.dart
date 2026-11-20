@@ -92,6 +92,7 @@ class _RawTouchGestureDetectorRegionState
   int _cacheLongPressPositionTs = 0;
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
+  bool _twoFingerCanvasChanged = false;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -449,6 +450,8 @@ class _RawTouchGestureDetectorRegionState
   // scale + pan event
   onTwoFingerScaleStart(ScaleStartDetails d) {
     _lastTapDownDetails = null;
+    _twoFingerCanvasChanged = false;
+    _mouseScrollIntegral = 0;
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -472,6 +475,25 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
 
+    // Two-finger vertical swipe scrolls the remote side; pinch still zooms and
+    // horizontal moves still pan the canvas. Three fingers are left to the OS.
+    if (!isDesktop &&
+        !isWebDesktop &&
+        !widget.isCamera &&
+        !ffi.ffiModel.isPeerAndroid &&
+        (d.scale - 1).abs() <= 0.02 &&
+        d.focalPointDelta.dy.abs() > d.focalPointDelta.dx.abs()) {
+      _mouseScrollIntegral += d.focalPointDelta.dy / 4;
+      if (_mouseScrollIntegral > 1) {
+        inputModel.scroll(1);
+        _mouseScrollIntegral = 0;
+      } else if (_mouseScrollIntegral < -1) {
+        inputModel.scroll(-1);
+        _mouseScrollIntegral = 0;
+      }
+      return;
+    }
+
     if (canvasLocked) return;
 
     if ((isDesktop || isWebDesktop)) {
@@ -490,8 +512,12 @@ class _RawTouchGestureDetectorRegionState
       // mobile
       ffi.canvasModel.updateScale(d.scale / _scale, d.focalPoint);
       _scale = d.scale;
-      ffi.canvasModel.panX(d.focalPointDelta.dx);
-      ffi.canvasModel.panY(d.focalPointDelta.dy);
+      if (d.focalPointDelta.dx.abs() > d.focalPointDelta.dy.abs()) {
+        ffi.canvasModel.panX(d.focalPointDelta.dx);
+      } else {
+        ffi.canvasModel.panY(d.focalPointDelta.dy);
+      }
+      _twoFingerCanvasChanged = true;
     }
   }
 
@@ -508,6 +534,10 @@ class _RawTouchGestureDetectorRegionState
     } else {
       // mobile
       _scale = 1;
+      if (_twoFingerCanvasChanged) {
+        _twoFingerCanvasChanged = false;
+        ffi.canvasModel.snapCanvas();
+      }
       // No idea why we need to set the view style to "" here.
       // bind.sessionSetViewStyle(sessionId: sessionId, value: "");
     }
@@ -517,18 +547,6 @@ class _RawTouchGestureDetectorRegionState
   }
 
   get onHoldDragCancel => null;
-  get onThreeFingerVerticalDragUpdate => ffi.ffiModel.isPeerAndroid
-      ? null
-      : (d) {
-          _mouseScrollIntegral += d.delta.dy / 4;
-          if (_mouseScrollIntegral > 1) {
-            inputModel.scroll(1);
-            _mouseScrollIntegral = 0;
-          } else if (_mouseScrollIntegral < -1) {
-            inputModel.scroll(-1);
-            _mouseScrollIntegral = 0;
-          }
-        };
 
   makeGestures(BuildContext context) {
     return <Type, GestureRecognizerFactory>{
@@ -584,8 +602,7 @@ class _RawTouchGestureDetectorRegionState
           ..onOneFingerPanCancel = onOneFingerPanCancel
           ..onTwoFingerScaleStart = onTwoFingerScaleStart
           ..onTwoFingerScaleUpdate = onTwoFingerScaleUpdate
-          ..onTwoFingerScaleEnd = onTwoFingerScaleEnd
-          ..onThreeFingerVerticalDragUpdate = onThreeFingerVerticalDragUpdate;
+          ..onTwoFingerScaleEnd = onTwoFingerScaleEnd;
       }),
     };
   }

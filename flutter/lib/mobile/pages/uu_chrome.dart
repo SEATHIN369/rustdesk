@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
+import '../../common/shared_state.dart';
 import '../../common/widgets/dialog.dart';
+import '../../consts.dart';
 import '../../models/platform_model.dart';
 import '../../models/uu_state.dart';
 import 'remote_page.dart';
@@ -87,15 +90,17 @@ class _UuChromeState extends State<UuChrome> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white, size: 26),
-          const SizedBox(height: 6),
-          Text(label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 11)),
-        ],
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 26),
+            const SizedBox(height: 6),
+            Text(label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 11)),
+          ],
+        ),
       ),
     );
   }
@@ -163,18 +168,23 @@ class _UuChromeState extends State<UuChrome> {
           right: 0,
           width: 72,
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _railItem(Icons.tune, '操作', () => _openDrawer('menu')),
-              _railItem(Icons.keyboard, '键盘', _openKeyboard),
-              _railItem(Icons.desktop_windows, '显示桌面',
-                  () => _sendWinCombo('VK_D')),
-              _railItem(
-                  isPeerAndroid ? Icons.build : Icons.grid_view,
-                  isPeerAndroid ? '更多操作' : '所有窗口',
-                  () => isPeerAndroid
-                      ? gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
-                      : _sendWinCombo('VK_TAB')),
+              // Each item owns a full quarter of the right edge, not just
+              // the small icon area.
+              Expanded(
+                  child: _railItem(Icons.tune, '操作', () => _openDrawer('menu'))),
+              Expanded(child: _railItem(Icons.keyboard, '键盘', _openKeyboard)),
+              Expanded(
+                  child: _railItem(Icons.desktop_windows, '显示桌面',
+                      () => _sendWinCombo('VK_D'))),
+              Expanded(
+                child: _railItem(
+                    isPeerAndroid ? Icons.build : Icons.grid_view,
+                    isPeerAndroid ? '更多操作' : '所有窗口',
+                    () => isPeerAndroid
+                        ? gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
+                        : _sendWinCombo('VK_TAB')),
+              ),
             ],
           ),
         ),
@@ -521,9 +531,6 @@ class _UuChromeState extends State<UuChrome> {
           child: Text('基础设置',
               style: TextStyle(color: Colors.white54, fontSize: 11)),
         ),
-        _sliderRow('键位透明度', scheme.opacity, 0.1, 0.9, (v) {
-          scheme.opacity = v;
-        }),
         _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
           scheme.keyScale = v;
         }),
@@ -542,8 +549,107 @@ class _UuChromeState extends State<UuChrome> {
         _toggleRow('被控端静音运行', optionOn('disable-audio'), (v) {
           toggleOption('disable-audio');
         }),
-        _toggleRow('被控端防窥模式（关闭显示器）', optionOn('privacy-mode'), (v) {
-          toggleOption('privacy-mode');
+        _toggleRow('退出远控时锁定电脑', optionOn('lock-after-session-end'), (v) {
+          toggleOption('lock-after-session-end');
+        }),
+        Obx(() {
+          final state = PrivacyModeState.find(widget.id);
+          final impls = gFFI.ffiModel.pi
+              .platformAdditions[kPlatformAdditionsSupportedPrivacyModeImpl] as List?;
+          final supported = impls != null && impls.isNotEmpty;
+          final on = state.value.isNotEmpty;
+          return SwitchListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            title: const Text('操控时电脑黑屏（防窥模式）',
+                style: TextStyle(color: Colors.white, fontSize: 13)),
+            subtitle: supported
+                ? null
+                : const Text('被控端不支持或未就绪',
+                    style: TextStyle(color: Colors.white38, fontSize: 11)),
+            value: on,
+            onChanged: (v) {
+              if (!supported) {
+                showToast('被控端不支持防窥模式');
+                return;
+              }
+              if (!on && gFFI.ffiModel.permissions['privacy_mode'] == false) {
+                showToast('被控端未授权防窥模式');
+                return;
+              }
+              final implKey = (impls.first as List)[0] as String;
+              bind.sessionTogglePrivacyMode(
+                  sessionId: sessionId, implKey: implKey, on: !on);
+            },
+          );
+        }),
+        const Divider(color: Colors.white12),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 10, 16, 2),
+          child: Text('自动解锁（Windows 锁屏）',
+              style: TextStyle(color: Colors.white54, fontSize: 11)),
+        ),
+        Builder(builder: (context) {
+          final unlockKey = 'uu-auto-unlock:${widget.id}';
+          Map<String, dynamic> cfg = {};
+          try {
+            final raw = bind.mainGetLocalOption(key: unlockKey);
+            if (raw.isNotEmpty) cfg = json.decode(raw) as Map<String, dynamic>;
+          } catch (_) {}
+          final pwd = cfg['pwd']?.toString() ?? '';
+          void store() => bind.mainSetLocalOption(
+              key: unlockKey, value: json.encode(cfg));
+          return Column(
+            children: [
+              _toggleRow('连接后自动输入密码解锁', cfg['on'] == true, (v) {
+                cfg['on'] = v;
+                store();
+              }),
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                title: const Text('登录密码',
+                    style: TextStyle(color: Colors.white, fontSize: 13)),
+                subtitle: Text(pwd.isEmpty ? '未设置' : '已设置',
+                    style:
+                        const TextStyle(color: Colors.white38, fontSize: 11)),
+                trailing: const Icon(Icons.edit,
+                    color: Colors.white54, size: 18),
+                onTap: () async {
+                  final controller = TextEditingController(text: pwd);
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Windows 登录密码'),
+                      content: TextField(
+                        controller: controller,
+                        obscureText: true,
+                        autofocus: true,
+                        decoration: const InputDecoration(
+                            hintText: '仅保存在本机配置中'),
+                      ),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text('取消')),
+                        TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(true),
+                            child: const Text('确定')),
+                      ],
+                    ),
+                  );
+                  if (ok != true || !mounted) return;
+                  setState(() => cfg['pwd'] = controller.text);
+                  store();
+                },
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text('连接建立 2 秒后自动输入密码并回车。仅在电脑处于锁屏时开启；未锁屏时密码会被输入到当前焦点窗口。',
+                    style: TextStyle(color: Colors.white38, fontSize: 11)),
+              ),
+            ],
+          );
         }),
       ],
     );

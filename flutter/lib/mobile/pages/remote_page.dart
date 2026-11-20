@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -110,6 +111,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Worker? _waylandKeyboardGateWorker;
   Worker? _uuKeyboardWorker;
   bool _uuKeyboardWasOpen = false;
+  bool _autoUnlockDone = false;
   bool _waylandKeyboardGateInitialized = false;
 
   InputModel get inputModel => gFFI.inputModel;
@@ -201,6 +203,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       uuState.save();
     });
     gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
+      _tryAutoUnlock(peerId);
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
       if (gFFI.recordingModel.start) {
@@ -505,6 +508,33 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
+  // UU-style auto unlock: type the stored Windows password once the first
+  // frame arrives. Only meaningful while the peer sits at the lock screen.
+  void _tryAutoUnlock(String peerId) {
+    if (_autoUnlockDone) return;
+    _autoUnlockDone = true;
+    if (gFFI.ffiModel.pi.platform != kPeerPlatformWindows) return;
+    Map<String, dynamic> cfg = {};
+    try {
+      final raw = bind.mainGetLocalOption(key: 'uu-auto-unlock:$peerId');
+      if (raw.isEmpty) return;
+      cfg = json.decode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+    if (cfg['on'] != true) return;
+    final pwd = cfg['pwd']?.toString() ?? '';
+    if (pwd.isEmpty) return;
+    Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      final input = gFFI.inputModel;
+      for (final ch in pwd.split('')) {
+        input.inputKey(ch);
+      }
+      input.inputKey('VK_RETURN');
+    });
+  }
+
   void _hideIme() {
     setState(() => _showEdit = false);
     gFFI.invokeMethod("enable_soft_keyboard", false);
@@ -637,10 +667,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   ),
                                   const UuFloatingKeysOverlay(),
                                   // Tapping outside the sheet equals Back,
-                                  // except on the IME tab where stray taps
-                                  // must not dismiss the system keyboard.
+                                  // except while the system IME is actually
+                                  // showing (stray taps must not dismiss it).
                                   Obx(() => uuState.keyboardOpen.value &&
-                                          uuState.keyboardTab.value != 0
+                                          (uuState.keyboardTab.value != 0 ||
+                                              !keyboardVisibilityController
+                                                  .isVisible)
                                       ? Positioned.fill(
                                           child: GestureDetector(
                                             behavior: HitTestBehavior.opaque,

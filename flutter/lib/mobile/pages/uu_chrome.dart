@@ -556,30 +556,34 @@ class _UuChromeState extends State<UuChrome> {
           final state = PrivacyModeState.find(widget.id);
           final impls = gFFI.ffiModel.pi
               .platformAdditions[kPlatformAdditionsSupportedPrivacyModeImpl] as List?;
-          final supported = impls != null && impls.isNotEmpty;
+          // UU-style physical screen-off: only the virtual-display impl
+          // unplugs the physical monitors; the others just overlay black.
+          const vdImpl = 'privacy_mode_impl_virtual_display';
+          final supported = impls != null &&
+              impls.any((e) => (e as List)[0] == vdImpl);
           final on = state.value.isNotEmpty;
           return SwitchListTile(
             dense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            title: const Text('操控时电脑黑屏（防窥模式）',
+            title: const Text('操控时物理关屏（虚拟屏防窥）',
                 style: TextStyle(color: Colors.white, fontSize: 13)),
             subtitle: supported
-                ? null
-                : const Text('被控端不支持或未就绪',
+                ? const Text('断开物理显示器，画面切到虚拟屏',
+                    style: TextStyle(color: Colors.white38, fontSize: 11))
+                : const Text('需被控端安装并以服务运行官方 RustDesk',
                     style: TextStyle(color: Colors.white38, fontSize: 11)),
             value: on,
             onChanged: (v) {
               if (!supported) {
-                showToast('被控端不支持防窥模式');
+                showToast('被控端不支持虚拟屏防窥（需安装版+服务运行）');
                 return;
               }
               if (!on && gFFI.ffiModel.permissions['privacy_mode'] == false) {
                 showToast('被控端未授权防窥模式');
                 return;
               }
-              final implKey = (impls.first as List)[0] as String;
               bind.sessionTogglePrivacyMode(
-                  sessionId: sessionId, implKey: implKey, on: !on);
+                  sessionId: sessionId, implKey: vdImpl, on: !on);
             },
           );
         }),

@@ -4,21 +4,28 @@
 状态：⬜ 待测 ｜ 🔄 进行中 ｜ ✅ 通过 ｜ ❌ 失败 ｜ ⏸ 阻塞 ｜ 🗑 废弃
 排查思路与 Windows 侧已知坑（A/W 宏、锁屏限制、幽灵屏、DPI、构建校验）在 `TROUBLESHOOTING.md`。
 
-最近更新：2026-11-21 22:33
+最近更新：2026-11-22 00:15
 
 ## 工件与环境
 
-- 分支：`local/1.5.3-android` @ `f9adc7a38`，已推 fork（github.com/kitsuneMori96/rustdesk）
-- 主机 DLL：36,244,992 B，SHA256 `45AEC95B…5A57`，已部署到 `D:\soft\apps\RustDesk`（22:24 起服务运行，含 ANSI 锁屏判定 + 唤醒键）
-- 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-2220.apk`，29,287,614 B，SHA256 `D84BAA57…CE39`（含解锁后防窥自动重试）
+- 分支：`local/1.5.3-android` @ `e95a55a6c`，已推 fork（github.com/kitsuneMori96/rustdesk）
+- 主机 DLL：36,245,504 B，SHA256 `E047F868…8D91`，已部署到 `D:\soft\apps\RustDesk`（23:33 起服务运行，含五问题修复；光标回退纯客户端，DLL 不变）
+- 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-22-0015.apk`，29,290,782 B，SHA256 `4A243C30…86FC`（光标回退上游恒画，修全屏灰罩；旧 2335 APK 已删）
 - 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,253 B（18:07 打包）；补丁 8 个文件，已验证能打在 tag 1.5.3 上
-- 分发测试包（Windows 便携应用）：`D:\Download\共享文件夹\rustdesk-uu-host-win64-test-2026-11-21-2226.zip`，33,445,740 B，SHA256 `EF0AC652…1306`（22:26 打包，含上述最终 DLL；22:20 / 21:48 / 18:59 的旧包已过时并删除 22:20 那个）
+- 分发测试包（Windows 便携应用）：`D:\Download\共享文件夹\rustdesk-uu-host-win64-test-2026-11-21-2335.zip`，33,446,385 B，SHA256 `21CDA2A0…F616`（23:35 打包，含最终 DLL `E047F868`；光标回退纯客户端，此包不变；旧 2220/2226 包已清）
 - 构建脚本：`C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat`（主机）/ `build_apk.bat`（APK）
 - 主机安装目录：官方备份 `librustdesk.dll.official-1.5.3.bak`，上一版自编译 `librustdesk.dll.selfbuild-prev.bak`
 
 ## 本轮待真机（重点）
 
-- 先装 22:26 主机包 + 22:20 APK（两边都要更新，只换一边测不出来）
+- 解锁 ×10：更快、日志 lock screen detected→success；未锁屏 skipped
+   - 锁屏中开防窥：失败期间开关不跳关，解锁后自动恢复、无弹框
+   - 光标：恒画单个远端光标跟手可见、无重影无灰罩（已回退上游形态）；「显示远端光标」开关默认关、可手动开
+   - 静音：连接后显示主机真实状态；会话中手动改 Windows 静音→回前台/重连后刷新一致
+   - 缩放：手机选 125%/150% 开防窥后界面真变大（日志 DPI set to＋回读一致）；手动改 Windows 缩放后重开防窥仍套用手机值
+   - 普通聊天收发正常（不受 uu: 拦截影响）
+
+- 先装 23:35 主机包 + 00:15 APK（主机 DLL 自 23:35 起未变，本轮只换 APK；两边都要是最新才测得准）
 - T29 / T42 锁屏 + 正确密码：主机日志应出现 `Auto unlock: lock screen detected`，随后解锁成功；连测 10 次
 - T40 未锁屏：日志 `skipped, state 0 desktop "Default"`（不再是 not at the lock screen 那句模糊文案）
 - T41 错误密码：重试 3 次后放弃，锁屏界面没被乱七八糟字符污染
@@ -106,7 +113,7 @@
 - T33 连官方 DLL 主机：显示「需被控端为编译版」，不崩 → ⬜
 - T34 关屏保持 → 🗑 废弃（断开必还原）
 - T35 防窥失败路径：20s 回滚并提示 → ⬜
-- T36 鼠标指针模式下移动：只有单个远端光标跟手可见，没有拖影 → 🔄 待真机（本轮改为指针模式恒画、触控默认隐藏）
+- T36 鼠标指针模式下移动：只有单个远端光标跟手可见，没有拖影 → 🔄 待真机（已回退上游恒画：撤销首帧强制 show-remote-cursor 与按模式门控，修复全屏灰罩回归）
 - T37 面板开着在画布拖动 / 点空白：鼠标能动、点空白收起 → ✅
 - T38 关一次防窥 → 重连：不恢复；开启过 → 重连自动关 → ✅
 - T39 密码框单个空格：显示 U+0020；全角 U+3000 黄字 → 🔄 待真机（存入格式已改为系统密钥库加密）。同时验证：升级后旧明文密码自动迁移、重启 App 后仍能解锁
@@ -123,7 +130,7 @@
 - 自动解锁注入的是账户密码：若电脑只配了 PIN / Windows Hello 且锁屏默认 PIN 框，输入会进 PIN 框而失败；需在锁屏切到「密码」登录。
 - 自动解锁的锁屏识别与注入只在服务模式（SYSTEM 会话）下可靠；便携用户模式受 UIPI 限制。
 - 锁屏期间 Windows 拒绝改显示模式，防窥开启必然失败（日志 `Privacy mode display commit attempt … failed`）；手机端在解锁后自动重试开启防窥，最长约 60s，期间开关保持开启不跳关、不弹提示。
-- 光标按模式显示：指针模式恒画单个远端光标（本地系统光标已隐藏，无重影）；触控模式默认隐藏（避免与手指指示重影），「显示远端光标」开关仅触控模式可见、可手动开。位置选项 `show-remote-cursor` 首帧强制 Y 让主机订阅 NAME_POS。
+- 光标恒画（上游形态）：`showCursorPaint`（非安卓对端、非内嵌光标、非相对鼠标模式）为真即画单个远端光标，不碰任何会话选项；键盘权限已让主机随路发送光标位置/形状，故无重影、无灰罩。「显示远端光标」开关翻的是真正的 `show-remote-cursor` 会话选项（默认关，两种模式可见可手动开）。教训：首帧强制 `show-remote-cursor=Y` 会让主机额外启动 `mouse_cursor` 服务，该服务在锁屏/切桌面瞬间崩溃（`os error 5`）并画出全屏灰罩——正常版从不强制该选项。
 - 静音只在连接 / App 回前台时查询主机真实状态（`uu:mute?` → 聊天回 `uu:mute-state`，Dart 拦截 `uu:` 前缀）；会话中手动改 Windows 静音要到下次查询才同步——轻量方案的固有取舍，不做持续监听。
 - 手机发自动解锁命令不再弹底部 toast（桌面画面从锁屏变桌面即反馈）。
 
@@ -147,3 +154,4 @@
 - 22:16 真机复测（22:07 那次「主机没行动」）：根因是锁屏判定误报——`GetUserObjectInformation` 在本编译单元是 A 版（ANSI），被写成 WCHAR 比较后桌面名永不匹配。改回 ANSI 比较、判定细分 0/1/2/-1 并记桌面名日志、收到命令后 12s 轮询等锁屏。同一时刻的防窥 commit 失败是锁屏期间系统拒绝改显示模式所致（非 NUL 回归），客户端改为解锁后按意图自动重试（auto 模式不弹提示、不重复预插虚拟屏）。DLL `18FB5AD4` 部署，APK `D84BAA57` 出包。
 - 22:24 追加修复：LogonUI 会吞掉锁屏的第一击，注入前先 tap 一次 VK_SHIFT 唤醒。最终 DLL `45AEC95B`（36,244,992 B）已部署、主机测试包重打为 22:26 版 `EF0AC652`；22:20 的中间包已删。
 - 23:35 真机反馈五问题最小修复：① 解锁提速 `UNLOCK_WAIT` 4s→2s、唤醒/退格 settle 收紧；② 防窥 auto 恢复加 `_privacyAutoRecovering`，锁屏失败开关保持 ON 不跳关、预算改 60s 时间基、auto 失败重置预插；③ 光标按模式（指针恒画单光标、触控默认隐藏可手动开），首帧强制 `show-remote-cursor=Y`；④ 静音连接/回前台查询（主机 `mute?`→聊天 `uu:mute-state`，Dart 拦 `uu:`）；⑤ 缩放手机值为准（`on_privacy_display_ready` 始终套用存储值＋回读，删 else 覆盖）。另去掉手机发解锁命令的底部 toast。主机→手机反向通道复用聊天消息（官方 .so 转 `chat_client_mode`），不改 `src/client/*`。DLL `E047F868`（36,245,504 B，4m22s）部署＋服务重启（新 --server PID 12684，23:33:29 启动无 panic）；APK `83517080`（29,291,364 B，156s）；主机测试包 23:35 版 `21CDA2A0`（33,446,385 B），旧 2220/2226 包已清。五项均待真机复测。
+- 2026-11-22 00:15 光标改动整体回退（修全屏灰罩回归）：23:35 APK 真机指针模式整个画面被半透明灰罩盖住（切触控消失、本机正常、连上瞬间就有重连不恢复）。用户纠正前几个版本光标本来正常→回退而非再设计。git 取证 `8305598ff` 之前恒画 `if (showCursorPaint)`、首帧无光标代码、面板翻真 `show-remote-cursor` 选项（默认关）= 正常版；坏两步是 `8305598ff` 改 `uuState.showRemoteCursor` 门控（默认 false→光标消失）与 `76a1f71db` 首帧强制 `show-remote-cursor=Y`→主机启 `mouse_cursor` 服务锁屏期崩溃 `os error 5` 画灰罩。修（仅 Dart 4 处）：首帧删强制选项段、绘制门恢复上游恒画、面板开关还原翻会话选项、删 `uuState.showRemoteCursor` 字段+重置（留 imeVisible/hostStateVersion/handleHostMessage/uuHostIntentKey）。其余四修复+去 toast 保留。纯客户端，主机 DLL 不变仍 `E047F868`、主机包仍 23:35 版 `21CDA2A0`（不重编不重启）。APK `4A243C30`（29,290,782 B，152.1s）→ 共享文件夹 0015 版，旧 2335 APK 已删。代码提交 `e95a55a6c`。待真机：光标无灰罩无重影（T36）+ 四修复回归。

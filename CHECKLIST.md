@@ -3,14 +3,14 @@
 约定：你直接加行、改期望、在结果里写现象；我回填状态与证据。不要写密码 / Peer ID / 公网 IP。
 状态：⬜ 待测 ｜ 🔄 进行中 ｜ ✅ 通过 ｜ ❌ 失败 ｜ ⏸ 阻塞 ｜ 🗑 废弃
 
-最近更新：2026-11-21 17:30
+最近更新：2026-11-21 18:08
 
 ## 工件与环境
 
-- 分支：`local/1.5.3-android` @ `e0da6b7f4`，已推 fork（github.com/kitsuneMori96/rustdesk）
+- 分支：`local/1.5.3-android` @ `c5a18c2f1`，已推 fork（github.com/kitsuneMori96/rustdesk）
 - 主机 DLL：36,238,336 B，SHA256 `ABC99FC7…E4B6`，已部署到 `D:\soft\apps\RustDesk`（18:06 起服务运行，`--server` 在会话 1）
 - 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-1712.apk`，29,282,884 B，SHA256 `F7FFEBA1…23AA`
-- 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,606 B；补丁 8 个文件，已验证能打在 tag 1.5.3 上
+- 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,253 B（18:07 重打）；补丁 8 个文件，已验证能打在 tag 1.5.3 上
 - 构建脚本：`C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat`（主机）/ `build_apk.bat`（APK）
 - 主机安装目录：官方备份 `librustdesk.dll.official-1.5.3.bak`，上一版自编译 `librustdesk.dll.selfbuild-prev.bak`
 

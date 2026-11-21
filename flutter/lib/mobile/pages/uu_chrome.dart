@@ -474,6 +474,7 @@ class _UuChromeState extends State<UuChrome> {
   Widget _actionTile({
     required IconData icon,
     required String label,
+    String? tooltip,
     bool active = false,
     bool enabled = true,
     VoidCallback? onTap,
@@ -483,32 +484,34 @@ class _UuChromeState extends State<UuChrome> {
         : active
             ? MyTheme.accent
             : Colors.white;
-    return Expanded(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 3),
-          decoration: BoxDecoration(
-            color: active
-                ? MyTheme.accent.withOpacity(0.16)
-                : const Color(0xFF2F2F31),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 28),
-              const SizedBox(height: 8),
-              Text(label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: color, fontSize: 11)),
-            ],
-          ),
+    Widget tile = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 3),
+        decoration: BoxDecoration(
+          color: active
+              ? MyTheme.accent.withOpacity(0.16)
+              : const Color(0xFF2F2F31),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: color, fontSize: 11)),
+          ],
         ),
       ),
     );
+    if (tooltip != null) {
+      tile = Tooltip(message: tooltip, child: tile);
+    }
+    return Expanded(child: tile);
   }
 
   Widget _actionBar() {
@@ -536,6 +539,7 @@ class _UuChromeState extends State<UuChrome> {
               _actionTile(
                 icon: audioOn ? Icons.volume_up : Icons.volume_off,
                 label: '声音',
+                tooltip: '只控制传到手机的声音，电脑扬声器照常发声',
                 active: audioOn,
                 onTap: () {
                   unawaited(bind.sessionToggleOption(

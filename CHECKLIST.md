@@ -27,7 +27,7 @@
 | G10 | 防窥流程稳健 | 预插→4s→重试 12s→回滚 20s；重连自动恢复上次开启状态 | 🔄 待真机 | pending 转圈、失败提示；意图存 `uu-host-privacy:<peer>` |
 | G11 | 自动解锁 | 锁屏后自动输密码+回车；**空格密码可用** | ⬜ | 密码框 visiblePassword + 插入空格 + 长度；全角空格黄字警告 |
 | G12 | 设置页弹窗可唤 IME | 方案重命名/新建、密码框都能弹输入法 | ⬜ | `_withIme()` |
-| G13 | 主机 DLL 交付协作者 | 打包 DLL + 补丁 + 部署说明 | ✅ | `D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`（15,548,802 B） |
+| G13 | 主机 DLL 交付协作者 | 打包 DLL + 补丁 + 部署说明 | ✅ | `D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`（15,523,825 B，16:17 重打） |
 | G14 | 小窗模式 PiP | Android PiP | ⏸ 未开工（P1） | 待你确认优先级 |
 | G15 | 顶部动作条替换旋转 | 旋转无接口已移除，换成「键盘」快捷入口 | ✅ 已改 | 五格：退出远控/键盘/声音/仅观看/小窗 |
 | G16 | 退出远控锁定电脑 | `lock-after-session-end` | ⬜ | 设置项已接 |
@@ -110,12 +110,12 @@
 
 | 项 | 值 |
 |---|---|
-| 分支 / 最新提交 | `local/1.5.3-android` @ `20e840d`（已推 fork） |
+| 分支 / 最新提交 | `local/1.5.3-android` @ `8305598`（已推 fork） |
 | 主机安装目录 | `D:\soft\apps\RustDesk`，官方备份 `librustdesk.dll.official-1.5.3.bak`，上一版自编译 `librustdesk.dll.selfbuild-prev.bak` |
-| 当前主机 DLL | 36,232,192 B，SHA256 `41E981E0…AF41`（部署于 2026-11-21 15:29，服务已重启） |
-| APK | `D:\Download\共享文件夹\rustdesk-uu-1.5.3-arm64.apk`（29,299,834 B，15:33） |
-| 协作者包 | `D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip` |
-| 构建脚本 | `C:\Users\Administrator\AppData\Local\Temp\rustdesk_host_build\build.bat` / `build_apk.bat` |
+| 当前主机 DLL | 36,230,144 B，SHA256 `BA20BEE2…6A90`（部署于 2026-11-21 16:16，服务已重启） |
+| APK | `D:\Download\共享文件夹\rustdesk-uu-1.5.3-arm64.apk`（29,298,392 B，SHA256 `6D737A76…DEF7`，16:14） |
+| 协作者包 | `D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`（15,523,825 B，16:17，含 7 文件全量 `host-src.patch`，已用 `git apply --check` 验证可打在 tag 1.5.3 上） |
+| 构建脚本 | `C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat` / `build_apk.bat` |
 
 ## 4. 已知问题 / 风险
 - 自编译 DLL 未开 `hwcodec`：UI 显示硬件加速不可用（预期，不影响功能）。
@@ -134,3 +134,4 @@
 ## 6. 变更记录
 - 2026-11-21 15:40 创建；回填六项新需求（G7-G9、G3-G4、G11）与主机 DLL/APK/协作者包工件。
 - 2026-11-21 17:10 按用户真机反馈修正：手势采样门控、IME 可见性、面板点外冲突、远端光标拖影、防窥意图持久化、默认缩放 125、废弃保持关屏、旋转换键盘；新增 T36–T39。
+- 2026-11-21 16:20 打包并推送：主机 DLL `BA20BEE2…6A90` 部署完成、APK `6D737A76…DEF7` 产出、协作者包重打（补丁扩到 7 文件并验证可应用）；提交 `8305598` 已推 fork。

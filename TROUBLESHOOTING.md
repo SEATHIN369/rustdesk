@@ -321,3 +321,47 @@ cmd 进交互壳即 EOF 退出，bat 根本没跑——任务通知还报 exit 0
 
 产物：DLL `E047F868`（36,245,504 B，4m22s）部署＋服务重启核实运行期；APK `83517080`（29,291,364 B）；
 主机测试包 23:35 版 `21CDA2A0`。五项均待真机复测。
+
+## 案例：指针模式全屏灰罩（2026-11-22 00:15，光标改动整体回退）
+
+**现象**：23:35 APK 真机——解锁提速生效，但指针模式下整个远控画面被一层半透明灰罩盖住，
+内容几乎看不清。差分测试：① 切触控模式灰罩消失；② 电脑本机画面正常；③ 连上瞬间就有、重连不恢复。
+
+**用户关键纠正**：前几个版本光标本来正常——不消失、不重影、也没有错误遮罩。
+所以不是「需要新光标方案」，而是两轮光标改动把本来好好的功能改坏了。方向应是**回退**而非再设计。
+
+**git 取证**（`8305598ff` 之前 = 用户认可的正常版）：
+- 正常版绘制门恒画：`if (showCursorPaint) { paints.add(CursorPaint(widget.id)); }`，不碰任何选项；
+  首帧回调里没有任何光标代码。
+- 正常版 UU 面板「显示远端光标」翻的是真正的 `show-remote-cursor` 会话选项
+  （`ShowRemoteCursorState` + `bind.sessionToggleOption`），默认关。
+
+**坏的两步**：
+1. `8305598ff`（拖影修复）把恒画改成 `uuState.showRemoteCursor`（默认 false）门控 → 光标默认消失
+   （上一轮「看不见鼠标」抱怨的来源）。「拖影」前提本身被用户否定。
+2. `76a1f71db`（fix 3）首帧**强制 `show-remote-cursor=Y`** + 指针模式恒画。强制选项让主机额外启动
+   `mouse_cursor` 服务（NAME_CURSOR）——运行日志 `23:42:33.845 ERROR mouse_cursor service: 拒绝访问
+   (os error 5)` 正是它，在锁屏/切桌面瞬间崩溃并画出全屏灰罩。正常版从不强制该选项（键盘权限已让主机
+   随路发送光标位置/形状，connection.rs `peer_keyboard_enabled() || show_remote_cursor`），故无此服务、无灰罩。
+
+**排除的静态嫌疑**（都不是灰罩来源）：`decode_cursor_data` 光标上限 MAX_CURSOR_SIZE=512；
+`ImagePainter` 用 `canvas.scale + drawImage(Offset)` 按自然尺寸画、不拉伸；画布底色纯黑
+（kColorCanvas/MyTheme.canvasColor=0xFF000000）；Android 视频 bgra8888 不透明；Dart 侧无全屏白罩
+（BlockableOverlay 中层透明、emptyOverlay 底层不透明黑、点外 barrier 是透明 GestureDetector）。
+决定性证据是用户触控差分 + git 正常版形态 + 主机 mouse_cursor 服务 os-error-5 崩溃日志三者吻合。
+
+**修**（仅客户端 Dart 4 处，主机 DLL 不动）：
+1. `remote_page.dart` 首帧：删掉强制 `show-remote-cursor` 整段 + `uuState.showRemoteCursor.value=false`。
+2. `remote_page.dart` 移动端绘制门：恢复上游 `if (showCursorPaint) { paints.add(CursorPaint(widget.id)); }`。
+3. `uu_chrome.dart::_displayRows`：「显示远端光标」还原为翻会话选项（不再按 touchMode 门控）。
+4. `uu_state.dart`：删 `showRemoteCursor` 字段与 resetSessionUi 里的重置；保留 imeVisible/hostStateVersion/
+   handleHostMessage/uuHostIntentKey（fix 2/4 仍用）。
+其余四修复（解锁提速/防窥不跳关/静音查询/缩放权威值）与去解锁 toast 保留不动。
+
+**教训**：① 用户说「以前是好的」时，先 git 取证回到已知良好形态，别在坏前提上继续叠加新方案。
+② 强制 `show-remote-cursor=Y` 会启动主机 mouse_cursor 服务，该服务锁屏期崩溃画灰罩——
+光标恒画 + 选项默认关才是正常态，不要自动强制该选项。③ 灰罩这类「画面被盖住」先做模式差分
+（指针 vs 触控）定位是哪条绘制/服务路径，再对照 git 历史，比纯静态读码更快收敛。
+
+产物：APK `4A243C30`（29,290,782 B，152.1s，00:15）；主机 DLL 无改动仍 `E047F868`、
+主机测试包仍 23:35 版 `21CDA2A0`（不重编 DLL、不重启服务）。待真机复测光标无灰罩无重影 + 四修复回归。

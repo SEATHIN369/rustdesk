@@ -168,11 +168,6 @@ class UuState {
   // keyboard-visibility callback has no observable of its own, so mirror it
   // here to rebuild the tap-outside barrier.
   final imeVisible = false.obs;
-  // Touch-mode override for painting the remote cursor inside the video.
-  // Pointer mode always paints a single host cursor (the local system cursor is
-  // hidden); touch mode hides it by default to avoid a second lagging cursor
-  // over the finger indicator, and this flag opts back in.
-  final showRemoteCursor = false.obs;
   // Bumped when the host reports state over the reverse chat channel so the
   // chrome (which reads persisted intents non-reactively) rebuilds.
   final hostStateVersion = 0.obs;
@@ -243,7 +238,6 @@ class UuState {
     drawerPage.value = null;
     editLayout.value = false;
     imeVisible.value = false;
-    showRemoteCursor.value = false;
   }
 }
 

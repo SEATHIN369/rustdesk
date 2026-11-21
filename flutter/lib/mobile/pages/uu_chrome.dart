@@ -919,21 +919,20 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         uuState.active.snapZoom = v;
       }, subtitle: '松手后吸附到适应/原始比例'),
     ];
-    if (gFFI.ffiModel.touchMode &&
-        !gFFI.ffiModel.isPeerAndroid &&
+    if (!gFFI.ffiModel.isPeerAndroid &&
         !gFFI.canvasModel.cursorEmbedded &&
         !pi.isWayland) {
-      // Pointer mode always draws a single host cursor, so this opt-in only
-      // matters in touch mode, where it overrides the default hide that avoids
-      // a second lagging cursor over the finger indicator.
       rows.add(Obx(() {
+        final state = ShowRemoteCursorState.find(widget.id);
         final lock = ShowRemoteCursorLockState.find(widget.id);
-        return _toggleRow('显示远端光标', uuState.showRemoteCursor.value, (v) {
-          uuState.showRemoteCursor.value = v;
+        return _toggleRow('显示远端光标', state.value, (v) async {
+          await bind.sessionToggleOption(
+              sessionId: gFFI.sessionId, value: 'show-remote-cursor');
+          state.value = bind.sessionGetToggleOptionSync(
+              sessionId: gFFI.sessionId, arg: 'show-remote-cursor');
         },
-            subtitle: gFFI.ffiModel.viewOnly || lock.value
-                ? '当前模式下不可用'
-                : '触控模式默认隐藏，避免与手指指示重影',
+            subtitle:
+                gFFI.ffiModel.viewOnly || lock.value ? '当前模式下不可用' : null,
             enabled: !gFFI.ffiModel.viewOnly && !lock.value);
       }));
     }

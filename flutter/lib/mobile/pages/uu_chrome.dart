@@ -678,7 +678,8 @@ class _UuChromeState extends State<UuChrome> {
               sessionId: gFFI.sessionId, arg: 'show-remote-cursor');
         },
             subtitle:
-                gFFI.ffiModel.viewOnly || lock.value ? '当前模式下不可用' : null);
+                gFFI.ffiModel.viewOnly || lock.value ? '当前模式下不可用' : null,
+            enabled: !gFFI.ffiModel.viewOnly && !lock.value);
       }));
     }
     if (_imageQualityLoaded && _imageQuality != null) {
@@ -1047,7 +1048,7 @@ class _UuChromeState extends State<UuChrome> {
   }
 
   Widget _toggleRow(String label, bool value, ValueChanged<bool> onChanged,
-      {String? subtitle}) {
+      {String? subtitle, bool enabled = true}) {
     return SwitchListTile(
       dense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1058,10 +1059,12 @@ class _UuChromeState extends State<UuChrome> {
           : Text(subtitle,
               style: const TextStyle(color: Colors.white38, fontSize: 11)),
       value: value,
-      onChanged: (v) {
-        setState(() => onChanged(v));
-        uuState.save();
-      },
+      onChanged: enabled
+          ? (v) {
+              setState(() => onChanged(v));
+              uuState.save();
+            }
+          : null,
     );
   }
 

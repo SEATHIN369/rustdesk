@@ -13,6 +13,8 @@ import '../../models/platform_model.dart';
 import '../../models/uu_state.dart';
 import 'remote_page.dart';
 
+const String _kPrivacyVdImpl = 'privacy_mode_impl_virtual_display';
+
 class UuChrome extends StatefulWidget {
   final String id;
   final VoidCallback onToggleGestureHelp;
@@ -76,7 +78,46 @@ class _UuChromeState extends State<UuChrome> {
       _privacyFailTimer?.cancel();
       setState(() => _privacyPendingOn = null);
     });
+    _migrateScaleDefault();
+    _restorePrivacyIntent();
     _poke();
+  }
+
+  // 125% is the default for the virtual display: a 1080p/1k stream is
+  // unreadable at 100% on a phone. One-time migration from the old default.
+  void _migrateScaleDefault() {
+    const flag = 'uu-scale-125-migrated';
+    if (bind.mainGetLocalOption(key: flag) == '1') return;
+    bind.mainSetLocalOption(key: flag, value: '1');
+    final stored = _hostSetting('scale', '');
+    if (stored.isEmpty || stored == '100') {
+      _setHostSetting('scale', '125');
+      Future.delayed(const Duration(seconds: 2), () {
+        if (!mounted || !_hostControlSupported) return;
+        _sendHostCmd('scale:125', true);
+      });
+    }
+  }
+
+  // Physical screen-off is an explicit per-peer choice; the host restores
+  // the screen on every disconnect, so re-apply it on reconnect.
+  void _restorePrivacyIntent() {
+    if (!_hostIntent('privacy')) return;
+    var attempts = 0;
+    void attempt() {
+      if (!mounted) return;
+      if (PrivacyModeState.find(widget.id).value.isNotEmpty) return;
+      if (_privacySupported()) {
+        _togglePrivacy(true, auto: true);
+        return;
+      }
+      // Peer info can arrive a few seconds after the page is built.
+      if (++attempts < 3) {
+        Timer(const Duration(seconds: 3), attempt);
+      }
+    }
+
+    Future.delayed(const Duration(seconds: 3), attempt);
   }
 
   @override
@@ -187,6 +228,83 @@ class _UuChromeState extends State<UuChrome> {
     // No ack frame for host controls; give the host a beat, then settle.
     _mutePendingTimer = Timer(const Duration(milliseconds: 1200), () {
       if (mounted) setState(() => _mutePending = false);
+    });
+  }
+
+  bool _privacySupported() {
+    final impls = gFFI.ffiModel.pi.platformAdditions[
+        kPlatformAdditionsSupportedPrivacyModeImpl] as List?;
+    return impls != null &&
+        impls.any(
+            (e) => (e as List).isNotEmpty && e[0] == _kPrivacyVdImpl);
+  }
+
+  // `on` is the user's intent, persisted per peer: the host always restores
+  // the physical screen on disconnect, so a new session re-applies it.
+  void _togglePrivacy(bool next, {bool auto = false}) {
+    if (_privacyPendingOn != null) return;
+    final cur = PrivacyModeState.find(widget.id).value.isNotEmpty;
+    if (cur == next) return;
+    if (!_privacySupported()) {
+      if (!auto) showToast('被控端不支持虚拟屏防窥（需安装版+服务运行）');
+      return;
+    }
+    if (next && gFFI.ffiModel.permissions['privacy_mode'] == false) {
+      if (!auto) showToast('被控端未授权防窥模式');
+      return;
+    }
+    setState(() => _privacyPendingOn = next);
+    _setHostIntent('privacy', next);
+    _privacyStartTimer?.cancel();
+    _privacyRetryTimer?.cancel();
+    _privacyFailTimer?.cancel();
+    if (!next) {
+      bind.sessionTogglePrivacyMode(
+          sessionId: gFFI.sessionId, implKey: _kPrivacyVdImpl, on: false);
+      _privacyFailTimer = Timer(const Duration(seconds: 6), () {
+        if (!mounted || _privacyPendingOn != false) return;
+        if (PrivacyModeState.find(widget.id).value.isNotEmpty) {
+          setState(() => _privacyPendingOn = null);
+          showToast('关闭防窥未响应，请稍后重试');
+        }
+      });
+      return;
+    }
+    // turn_on only waits 5s for the virtual display to appear, but Amyuni's
+    // monitor needs ~6s to reach ACTIVE. Plug it first so the server-side
+    // check finds it instead of racing.
+    final preplug = gFFI.ffiModel.pi.isAmyuniIdd;
+    final hadVirtualDisplay =
+        gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty;
+    void requestPrivacy() {
+      if (!mounted || _privacyPendingOn != true) return;
+      bind.sessionTogglePrivacyMode(
+          sessionId: gFFI.sessionId, implKey: _kPrivacyVdImpl, on: true);
+    }
+
+    if (preplug) {
+      bind.sessionToggleVirtualDisplay(
+          sessionId: gFFI.sessionId, index: 0, on: true);
+      _privacyStartTimer = Timer(const Duration(seconds: 4), requestPrivacy);
+    } else {
+      requestPrivacy();
+    }
+    _privacyRetryTimer = Timer(const Duration(seconds: 12), () {
+      if (!mounted || _privacyPendingOn != true) return;
+      if (PrivacyModeState.find(widget.id).value.isEmpty) {
+        requestPrivacy();
+      }
+    });
+    _privacyFailTimer = Timer(const Duration(seconds: 20), () {
+      if (!mounted || _privacyPendingOn != true) return;
+      if (PrivacyModeState.find(widget.id).value.isEmpty) {
+        if (preplug && !hadVirtualDisplay) {
+          bind.sessionToggleVirtualDisplay(
+              sessionId: gFFI.sessionId, index: 0, on: false);
+        }
+        setState(() => _privacyPendingOn = null);
+        showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
+      }
     });
   }
 
@@ -330,7 +448,7 @@ class _UuChromeState extends State<UuChrome> {
       children: [
         Positioned.fill(
           child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
+            behavior: HitTestBehavior.translucent,
             onTap: () => uuState.railOpen.value = false,
           ),
         ),
@@ -391,9 +509,12 @@ class _UuChromeState extends State<UuChrome> {
     return Stack(
       children: [
         // Tapping outside the drawer equals Back (one level up).
+        // Tapping outside the drawer equals Back (one level up). Translucent so
+        // drags still reach the canvas underneath instead of blocking the
+        // remote mouse while the panel is open.
         Positioned.fill(
           child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
+            behavior: HitTestBehavior.translucent,
             onTap: () {
               uuState.drawerPage.value = page == 'menu' ? null : 'menu';
             },
@@ -598,10 +719,12 @@ class _UuChromeState extends State<UuChrome> {
                 onTap: () => clientClose(gFFI.sessionId, gFFI),
               ),
               _actionTile(
-                icon: Icons.screen_rotation,
-                label: '旋转屏幕',
-                enabled: false,
-                onTap: () => showToast('Windows 被控端暂不支持远端屏幕旋转'),
+                icon: Icons.keyboard,
+                label: '键盘',
+                onTap: () {
+                  uuState.drawerPage.value = null;
+                  uuState.keyboardOpen.value = true;
+                },
               ),
               _actionTile(
                 icon: audioOn ? Icons.volume_up : Icons.volume_off,
@@ -747,6 +870,7 @@ class _UuChromeState extends State<UuChrome> {
               sessionId: gFFI.sessionId, value: 'show-remote-cursor');
           state.value = bind.sessionGetToggleOptionSync(
               sessionId: gFFI.sessionId, arg: 'show-remote-cursor');
+          uuState.showRemoteCursor.value = state.value;
         },
             subtitle:
                 gFFI.ffiModel.viewOnly || lock.value ? '当前模式下不可用' : null,
@@ -763,7 +887,6 @@ class _UuChromeState extends State<UuChrome> {
     final hostControl = _hostControlSupported;
     final muted = _hostIntent('mute');
     final restoreAudio = _hostIntent('restore-audio');
-    final restoreScreen = _hostIntent('restore-screen');
     final displayMode = _hostSetting('display', '1920x1080');
     return [
       Builder(builder: (context) {
@@ -805,85 +928,12 @@ class _UuChromeState extends State<UuChrome> {
       }),
       Obx(() {
         final state = PrivacyModeState.find(widget.id);
-        final impls = gFFI.ffiModel.pi.platformAdditions[
-            kPlatformAdditionsSupportedPrivacyModeImpl] as List?;
-        const vdImpl = 'privacy_mode_impl_virtual_display';
-        final supported =
-            impls != null && impls.any((e) => (e as List)[0] == vdImpl);
         final on = state.value.isNotEmpty;
-        final pending = _privacyPendingOn;
         return _PrivacyModeTile(
           on: on,
-          pending: pending,
-          supported: supported,
-          onChanged: (v) {
-            if (pending != null) return;
-            if (!supported) {
-              showToast('被控端不支持虚拟屏防窥（需安装版+服务运行）');
-              return;
-            }
-            if (!on && gFFI.ffiModel.permissions['privacy_mode'] == false) {
-              showToast('被控端未授权防窥模式');
-              return;
-            }
-            setState(() => _privacyPendingOn = !on);
-            if (hostControl) {
-              final (w, h) = _parseDisplayMode(
-                  _hostSetting('display', '1920x1080'));
-              _sendHostCmd('display:${w}x$h', true);
-              _sendHostCmd('scale:${_hostSetting('scale', '100')}', true);
-              _sendHostCmd('privacy-persist',
-                  !on ? !_hostIntent('restore-screen') : false);
-            }
-            _privacyStartTimer?.cancel();
-            _privacyRetryTimer?.cancel();
-            _privacyFailTimer?.cancel();
-            if (!on) {
-              // turn_on only waits 5s for the virtual display to appear, but
-              // Amyuni's monitor needs ~6s to reach ACTIVE. Plug it first so
-              // the server-side check finds it instead of racing.
-              final preplug = gFFI.ffiModel.pi.isAmyuniIdd;
-              final hadVirtualDisplay =
-                  gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty;
-              void requestPrivacy() {
-                if (!mounted || _privacyPendingOn != true) return;
-                bind.sessionTogglePrivacyMode(
-                    sessionId: gFFI.sessionId, implKey: vdImpl, on: true);
-              }
-
-              if (preplug) {
-                bind.sessionToggleVirtualDisplay(
-                    sessionId: gFFI.sessionId, index: 0, on: true);
-                _privacyStartTimer =
-                    Timer(const Duration(seconds: 4), requestPrivacy);
-              } else {
-                requestPrivacy();
-              }
-              _privacyRetryTimer = Timer(const Duration(seconds: 12), () {
-                if (!mounted || _privacyPendingOn != true) return;
-                if (PrivacyModeState.find(widget.id).value.isEmpty) {
-                  requestPrivacy();
-                }
-              });
-              _privacyFailTimer = Timer(const Duration(seconds: 20), () {
-                if (!mounted || _privacyPendingOn != true) return;
-                if (PrivacyModeState.find(widget.id).value.isEmpty) {
-                  if (preplug && !hadVirtualDisplay) {
-                    bind.sessionToggleVirtualDisplay(
-                        sessionId: gFFI.sessionId, index: 0, on: false);
-                  }
-                  setState(() => _privacyPendingOn = null);
-                  showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
-                }
-              });
-            } else {
-              _privacyFailTimer = Timer(const Duration(seconds: 6), () {
-                if (!mounted || _privacyPendingOn != false) return;
-                setState(() => _privacyPendingOn = null);
-                showToast('关闭防窥未响应，请稍后重试');
-              });
-            }
-          },
+          pending: _privacyPendingOn,
+          supported: _privacySupported(),
+          onChanged: _togglePrivacy,
         );
       }),
       _toggleRow('断开后恢复声音', hostControl && restoreAudio, (v) {
@@ -896,19 +946,6 @@ class _UuChromeState extends State<UuChrome> {
           subtitle: hostControl
               ? (restoreAudio ? '断开后把扬声器还原成连接前的状态' : '断开后保持静音，长期有效')
               : '需被控端为本项目编译版 RustDesk'),
-      _toggleRow('断开后恢复屏幕', hostControl && restoreScreen, (v) {
-        if (!hostControl) return;
-        setState(() {
-          _setHostIntent('restore-screen', v);
-          _sendHostCmd('restore-screen', v);
-          if (PrivacyModeState.find(widget.id).value.isNotEmpty) {
-            _sendHostCmd('privacy-persist', !v);
-          }
-        });
-      },
-          subtitle: hostControl
-              ? (restoreScreen ? '断开后点亮物理屏并退出防窥' : '断开后保持关屏，长期有效')
-              : '需被控端为本项目编译版 RustDesk'),
       if (hostControl)
         ListTile(
           dense: true,
@@ -916,7 +953,7 @@ class _UuChromeState extends State<UuChrome> {
           title: const Text('显示缩放',
               style: TextStyle(color: Colors.white, fontSize: 13)),
           subtitle: Text(
-              '当前 ${_hostSetting('scale', '100')}% · 下次开启关屏时生效（真正 DPI 缩放）',
+              '当前 ${_hostSetting('scale', '125')}% · 下次开启关屏时生效（真正 DPI 缩放）',
               style: const TextStyle(color: Colors.white38, fontSize: 11)),
           trailing:
               const Icon(Icons.chevron_right, color: Colors.white54, size: 18),
@@ -927,7 +964,7 @@ class _UuChromeState extends State<UuChrome> {
               '150': '150%',
               '175': '175%',
             };
-            final scale = _hostSetting('scale', '100');
+            final scale = _hostSetting('scale', '125');
             final picked = await showDialog<String>(
               context: context,
               builder: (ctx) => SimpleDialog(
@@ -1356,6 +1393,29 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
 
   void _store() => bind.mainSetLocalOption(key: _key, value: json.encode(_cfg));
 
+  static String _wsCodes(String s) {
+    final codes = <String>[];
+    for (final r in s.runes) {
+      if (String.fromCharCode(r).trim().isEmpty) {
+        codes.add('U+${r.toRadixString(16).toUpperCase().padLeft(4, '0')}');
+      }
+    }
+    return codes.join(' / ');
+  }
+
+  static bool _hasFullWidthSpace(String s) => s.contains('\u3000');
+
+  static String _pwdSummary(String pwd) {
+    if (pwd.isEmpty) return '未设置';
+    if (_hasFullWidthSpace(pwd)) {
+      return '已设置（含全角空格 U+3000，Windows 登录不认，请重设）';
+    }
+    if (pwd.trim().isEmpty) {
+      return '已设置（长度 ${pwd.length}，空格 ${_wsCodes(pwd)}）';
+    }
+    return '已设置（${pwd.length} 个字符）';
+  }
+
   Future<T?> _withIme<T>(Future<T?> Function() run) async {
     await gFFI.invokeMethod("enable_soft_keyboard", true);
     try {
@@ -1386,14 +1446,9 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: const Text('登录密码',
               style: TextStyle(color: Colors.white, fontSize: 13)),
-          subtitle: Text(
-              pwd.isEmpty
-                  ? '未设置'
-                  : (pwd.contains('\u3000')
-                      ? '已设置（含全角空格，Windows 不认，请重设）'
-                      : '已设置（${pwd.length} 个字符）'),
+          subtitle: Text(_pwdSummary(pwd),
               style: TextStyle(
-                  color: pwd.contains('\u3000')
+                  color: _hasFullWidthSpace(pwd)
                       ? Colors.amber
                       : Colors.white38,
                   fontSize: 11)),
@@ -1436,13 +1491,22 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
                             style: const TextStyle(
                                 color: Colors.white54, fontSize: 12)),
                       ]),
-                      if (controller.text.trim().isEmpty &&
-                          controller.text.isNotEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Text('提示：密码仅由空格组成，请确认长度正确',
+                      if (controller.text.isNotEmpty &&
+                          controller.text.trim().isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                              controller.text
+                                          .codeUnits
+                                          .every((c) => c == 0x20)
+                                  ? '码点：U+0020（半角空格）'
+                                  : '码点：${_wsCodes(controller.text)}（必须为 U+0020）',
                               style: TextStyle(
-                                  color: Colors.amber, fontSize: 11)),
+                                  color: controller.text.codeUnits
+                                          .every((c) => c == 0x20)
+                                      ? Colors.white54
+                                      : Colors.amber,
+                                  fontSize: 11)),
                         ),
                     ],
                   ),

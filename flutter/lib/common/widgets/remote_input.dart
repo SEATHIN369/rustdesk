@@ -569,7 +569,6 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (nowUs - _intentLastSampleUs < _kTwoFingerIntentSampleGapUs) return;
-    _intentLastSampleUs = nowUs;
     final start1 = _intentTouchStart[_intentPointers[0]];
     final start2 = _intentTouchStart[_intentPointers[1]];
     final last1 = _intentTouchLast[_intentPointers[0]];
@@ -584,12 +583,18 @@ class _RawTouchGestureDetectorRegionState
         prev2 == null) {
       return;
     }
-    _intentSamplePrev1 = last1;
-    _intentSamplePrev2 = last2;
+    // Only advance the sample clock and the reference point when this
+    // sample is actually counted. Pointer events arrive faster than the
+    // fingers move between ticks (a pinch moves <8px per 8ms tick), so
+    // consuming the slot on every tick would starve the vote loop and
+    // never lock pinch.
     if ((last1 - prev1).distance < _kTwoFingerIntentMinSamplePx ||
         (last2 - prev2).distance < _kTwoFingerIntentMinSamplePx) {
       return;
     }
+    _intentLastSampleUs = nowUs;
+    _intentSamplePrev1 = last1;
+    _intentSamplePrev2 = last2;
     final v1 = last1 - start1;
     final v2 = last2 - start2;
     if (v1.distance < _kTwoFingerIntentMinSamplePx ||

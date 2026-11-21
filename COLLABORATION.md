@@ -85,15 +85,15 @@ flutter build apk --release --target-platform android-arm64
 - **主机命令通道**：官方 Android `.so` 无法发送新协议消息，`TogglePrivacyMode.impl_key` 是唯一带自由字符串、
   且手机端 Dart 能直接调用的信道；主机在 `toggle_privacy_mode` 开头拦截 `uu:` 前缀（仍要求已认证远控连接）。
   除 `uu:mute` 外，其它 `uu:` 键不会进入官方防窥逻辑。
-- **静音/关屏长期有效**：最后一个远控连接断开时，若 `privacy_persist` 且正在防窥，跳过
-  `virtual_display_manager::reset_all()`；静音按 `restore_audio` 决定是否恢复。
-  **两个恢复开关互相独立**（2026-11-21 用户要求）：`uu:restore-audio` 控制断开后是否还原扬声器，
-  `uu:restore-screen` 只同步 `uu:privacy-persist`（断开后是否保持关屏）；旧 `uu:restore` 仍按“两个都设”兼容。
-  旧状态文件里的 `restore_on_disconnect` 会在加载时迁移成这两个字段。主机重启后物理屏恢复（安全兜底），
-  静音状态由服务启动时重放。
+- **断开时恢复**：最后一个远控连接断开时**一定**执行 `virtual_display_manager::reset_all()`，
+  物理屏必定点亮（“断开后保持关屏”判定过危险，已废弃，`uu:restore-screen` / `uu:privacy-persist`
+  命令一并移除）。静音按 `restore_audio` 决定是否恢复；旧状态文件里的 `restore_on_disconnect`
+  加载时迁移到 `restore_audio`。手机端按 peer 记住防窥意图，重连约 3s 后自动重新预插并开启。
+  主机重启后物理屏恢复（安全兜底），静音状态由服务启动时重放。
 - **虚拟屏真缩放（DPI）**：`uu:scale:100|125|150|175` 不再改分辨率，而是写当前交互用户
   `HKCU\Control Panel\Desktop\PerMonitorSettings\NOEDID_1414_008B*` 的 `DpiValue`
-  （0/1/2/3 = 100/125/150/175%）。Amyuni 虚拟屏无 EDID，Windows 给它的键名以 `NOEDID_1414_` 开头；
+  （0/1/2/3 = 100/125/150/175%）。**默认 125%**（客户端与主机状态默认值一致，旧 100% 一次性迁移）。
+  Amyuni 虚拟屏无 EDID，Windows 给它的键名以 `NOEDID_1414_` 开头；
   服务以 SYSTEM 身份运行，先 `WTSQueryUserToken` 取活动会话用户 SID 再写 `HKU\<SID>`。
   Windows 在显示器热插拔时读取该值，所以与防窥开关联动：开防窥（插入虚拟屏）时生效，界面文案为“下次开启关屏时生效”。
   分辨率（`uu:display:WxH`）与缩放相互独立，可组合。
@@ -144,7 +144,7 @@ flutter build apk --release --target-platform android-arm64
 | A（kitsuneMori96） | 横屏方向翻转、自动解锁改 Seq 通道、防窥预插虚拟屏、静音文案澄清 | `remote_page.dart`、`uu_chrome.dart` | 已提交 80861b9，待真机验证 |
 | A | 打包、构建笔记、被控端日志排查 | — | 进行中（2026-11-21 自编译主机 DLL 已部署，新 APK 构建中） |
 | B（SEA369） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart` | 已合并（PR #1，bab48e7）；A 于 2026-11-21 按真机反馈再调参（见 8.2） |
-| B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 已合并（PR #2，40c539d），主机功能（静音/恢复开关/缩放/自动解锁 IME）已重新合入 |
+| B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 已合并（PR #2，40c539d），主机功能（静音/恢复开关/缩放/自动解锁 IME）已重新合入；旋转格换成键盘入口 |
 
 分工边界：A 不碰 `remote_input.dart`，B 不改防窥/自动解锁逻辑；两边都要动 `uu_chrome.dart` 时先在 issue 里对齐。
 各自切分支、PR 回 `local/1.5.3-android`，不要直接推主线。
@@ -263,7 +263,7 @@ P1 = 小窗模式 PiP；P2 = 旋转屏幕（需用户拍板：客户端画布旋
 6. 右缘：四块区域整块可点；点外收起；闲置 4s 淡出。
 7. 操作面板：顶部动作条「退出远控/声音/仅观看」状态色正确；按键映射、屏幕触控/鼠标指针、显示鼠标按键生效；防窥、退出锁屏、自动解锁、虚拟按键方案都在对应分组里且逐一生效；防窥点击瞬间有转圈，先预插虚拟屏、约 4s 后开启，失败会回滚并提示。
 8. 退出会话后：被控端物理屏恢复、声音恢复、未勾选时不锁屏。
-9. 「安全」卡新项：「断开后恢复声音」「断开后恢复屏幕」两个开关互不影响；「显示缩放」选 125% 后，下次开防窥时分辨率不变但界面变大且清晰；「虚拟屏分辨率」与缩放可自由组合。
+9. 「安全」卡「断开后恢复声音」开关生效；防窥断开必定点亮物理屏；「显示缩放」默认 125%，选 150% 后下次开防窥时分辨率不变但界面变大且清晰；「虚拟屏分辨率」与缩放可自由组合。
 10. 手势：快速大范围滑动滚轮要跟手（不再只有慢速档）；常规幅度捏合即可缩放，不必夸张张开；缩放灵敏度滑块最高可到 3.0。
 11. 自动解锁：密码为单个空格时能存住并解锁；密码框有「插入空格」按钮与长度显示，含全角空格会黄字警告。
 

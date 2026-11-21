@@ -20,14 +20,9 @@ pub struct State {
     /// Restore the speaker to its pre-session state on disconnect.
     #[serde(default)]
     pub restore_audio: bool,
-    /// Keep the physical screen off on disconnect (privacy stays on).
-    #[serde(default)]
-    pub restore_screen: bool,
-    /// Legacy combined flag; migrated into the two flags above on load.
+    /// Legacy combined flag; migrated into restore_audio on load.
     #[serde(default, skip_serializing)]
     pub restore_on_disconnect: bool,
-    #[serde(default)]
-    pub privacy_persist: bool,
     /// Endpoint mute state before we changed it, restored only when it is Some.
     #[serde(default)]
     pub prev_mute: Option<bool>,
@@ -49,7 +44,7 @@ fn default_height() -> u32 {
 }
 
 fn default_scale() -> u32 {
-    100
+    125
 }
 
 impl Default for State {
@@ -57,9 +52,7 @@ impl Default for State {
         Self {
             mute: false,
             restore_audio: false,
-            restore_screen: false,
             restore_on_disconnect: false,
-            privacy_persist: false,
             prev_mute: None,
             display_width: default_width(),
             display_height: default_height(),
@@ -79,12 +72,7 @@ impl State {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         if s.restore_on_disconnect {
-            if !s.restore_audio {
-                s.restore_audio = true;
-            }
-            if !s.restore_screen {
-                s.restore_screen = true;
-            }
+            s.restore_audio = true;
             s.restore_on_disconnect = false;
         }
         s
@@ -355,20 +343,6 @@ pub fn set_restore_audio(restore: bool) {
     hbb_common::log::info!("Host audio restore-on-disconnect set to {restore}");
 }
 
-pub fn set_restore_screen(restore: bool) {
-    with_state(|s| s.restore_screen = restore);
-    hbb_common::log::info!("Host screen restore-on-disconnect set to {restore}");
-}
-
-pub fn set_privacy_persist(persist: bool) {
-    with_state(|s| s.privacy_persist = persist);
-    hbb_common::log::info!("Host privacy persist set to {persist}");
-}
-
-pub fn privacy_persist() -> bool {
-    STATE.lock().unwrap().privacy_persist
-}
-
 /// Called when the last remote connection goes away.
 pub fn on_all_connections_closed() {
     let (restore_audio, mute) = {
@@ -397,21 +371,8 @@ pub fn handle_command(key: &str, on: bool) -> bool {
             set_mute(on);
             true
         }
-        "restore" => {
+        "restore" | "restore-audio" => {
             set_restore_audio(on);
-            set_restore_screen(on);
-            true
-        }
-        "restore-audio" => {
-            set_restore_audio(on);
-            true
-        }
-        "restore-screen" => {
-            set_restore_screen(on);
-            true
-        }
-        "privacy-persist" => {
-            set_privacy_persist(on);
             true
         }
         _ => {

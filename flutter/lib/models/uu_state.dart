@@ -160,6 +160,13 @@ class UuState {
   // null = closed, otherwise 'menu' / 'schemes' / 'gestures'
   final drawerPage = RxnString();
   final editLayout = false.obs;
+  // True while the IME (system keyboard) is actually on screen. The
+  // keyboard-visibility callback has no observable of its own, so mirror it
+  // here to rebuild the tap-outside barrier.
+  final imeVisible = false.obs;
+  // Paint the remote cursor inside the video. Upstream mobile always draws
+  // it, which shows a second cursor lagging behind the local pointer.
+  final showRemoteCursor = false.obs;
 
   UuScheme get active {
     final name = activeName.value;
@@ -215,6 +222,8 @@ class UuState {
     keyboardOpen.value = false;
     drawerPage.value = null;
     editLayout.value = false;
+    imeVisible.value = false;
+    showRemoteCursor.value = false;
   }
 }
 

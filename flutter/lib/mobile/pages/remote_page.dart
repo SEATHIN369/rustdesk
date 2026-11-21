@@ -238,6 +238,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       }
       _disableAndroidSoftKeyboard(
           isKeyboardVisible: keyboardVisibilityController.isVisible);
+      uuState.showRemoteCursor.value = bind.sessionGetToggleOptionSync(
+          sessionId: sessionId, arg: 'show-remote-cursor');
       // Seed shortcut action callbacks once the session is ready, so that
       // global keyboard shortcuts work even if the user never opens the
       // toolbar menu. The returned list is intentionally discarded — the
@@ -374,6 +376,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    uuState.imeVisible.value = visible;
     if (!visible) {
       _setImmersive(true);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
@@ -697,13 +700,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                           ),
                                   ),
                                   const UuFloatingKeysOverlay(),
-                                  // Tapping outside the sheet equals Back,
-                                  // except while the system IME is actually
-                                  // showing (stray taps must not dismiss it).
+                                  // Tapping outside the sheet equals Back, except while the system IME is
+// actually showing (stray taps must not dismiss it). The IME flag lives in
+// uuState because keyboard_visibility's value is not observable.
                                   Obx(() => uuState.keyboardOpen.value &&
                                           (uuState.keyboardTab.value != 0 ||
-                                              !keyboardVisibilityController
-                                                  .isVisible)
+                                              !uuState.imeVisible.value)
                                       ? Positioned.fill(
                                           child: GestureDetector(
                                             behavior: HitTestBehavior.opaque,
@@ -826,7 +828,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ];
           if (showCursorPaint) {
-            paints.add(CursorPaint(widget.id));
+            // Upstream mobile always paints the remote cursor; that shows a
+            // second cursor trailing the local pointer. Only paint it when
+            // the user explicitly enables it.
+            paints.add(Obx(() => uuState.showRemoteCursor.value
+                ? CursorPaint(widget.id)
+                : const SizedBox.shrink()));
           }
           if (gFFI.ffiModel.touchMode) {
             paints.add(FloatingMouse(

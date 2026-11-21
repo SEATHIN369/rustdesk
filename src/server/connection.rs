@@ -7109,11 +7109,9 @@ mod raii {
                 #[cfg(windows)]
                 {
                     crate::host_controls::on_all_connections_closed();
-                    let keep_privacy = crate::host_controls::privacy_persist()
-                        && privacy_mode::is_in_privacy_mode();
-                    if !keep_privacy {
-                        let _ = virtual_display_manager::reset_all();
-                    }
+                    // Always restore the physical screen on disconnect; keeping
+                    // it off was judged too dangerous.
+                    let _ = virtual_display_manager::reset_all();
                 }
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote || self.1 == AuthConnType::ViewCamera {

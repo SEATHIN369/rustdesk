@@ -712,25 +712,35 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                           ),
                                   ),
                                   const UuFloatingKeysOverlay(),
-                                  // Tapping outside behaves like UU: while the
-                                  // system IME is up the first tap only lowers
-                                  // it, the next tap closes the sheet.
-                                  Obx(() => uuState.keyboardOpen.value
-                                      ? Positioned.fill(
-                                          child: GestureDetector(
-                                            behavior: HitTestBehavior.opaque,
-                                            onTap: () {
-                                              if (uuState.keyboardTab.value == 0 &&
-                                                  uuState.imeVisible.value) {
-                                                _hideIme();
-                                                return;
-                                              }
-                                              uuState.keyboardOpen.value = false;
-                                              _hideIme();
-                                            },
-                                          ),
-                                        )
-                                      : const SizedBox.shrink()),
+                                  // One tap outside closes the keyboard sheet
+                                  // outright. The old two-stage "lower the IME
+                                  // first, tap again to close" anti-mistouch is
+                                  // removed on purpose. The region stops at the
+                                  // right-edge rail (72 px) so those icons stay
+                                  // tappable, and when the operation drawer is
+                                  // open its own barrier owns tap-outside so a
+                                  // single tap never closes both.
+                                  Obx(() {
+                                    final kb = uuState.keyboardOpen.value;
+                                    final drawerOpen =
+                                        uuState.drawerPage.value != null;
+                                    if (!kb || drawerOpen) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return Positioned(
+                                      left: 0,
+                                      top: 0,
+                                      bottom: 0,
+                                      right: 72,
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: () {
+                                          uuState.keyboardOpen.value = false;
+                                          _hideIme();
+                                        },
+                                      ),
+                                    );
+                                  }),
                                   UuChrome(
                                     id: widget.id,
                                     onToggleGestureHelp: () => setState(() =>
@@ -740,7 +750,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   Obx(() => uuState.keyboardOpen.value
                                       ? Positioned(
                                           left: 0,
-                                          right: 0,
+                                          right: 72,
                                           bottom: uuState.keyboardTab.value == 0
                                               ? MediaQuery.of(context)
                                                   .viewInsets

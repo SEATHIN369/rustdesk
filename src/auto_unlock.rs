@@ -19,7 +19,7 @@ use std::{
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
-pub fn request_unlock(password: String) {
+pub fn request_unlock(password: String, tx: Option<crate::server::Sender>) {
     if password.is_empty() {
         return;
     }
@@ -30,12 +30,41 @@ pub fn request_unlock(password: String) {
     std::thread::spawn(move || {
         let outcome = run(&password);
         log::info!("Auto unlock: {outcome}");
+        let status = if outcome.starts_with("success") || outcome.starts_with("done") {
+            "success"
+        } else if outcome.starts_with("skipped") {
+            "skipped"
+        } else {
+            "failed"
+        };
+        report_status(&tx, status);
         RUNNING.store(false, Ordering::SeqCst);
     });
 }
 
+/// Push `uu:unlock-state:<status>` back over the originating connection's chat
+/// channel. The connection may already be gone (client disconnected mid-unlock),
+/// in which case the send fails; that is expected, so the error is ignored.
+#[cfg(windows)]
+fn report_status(tx: &Option<crate::server::Sender>, status: &str) {
+    use base::message_proto::{ChatMessage, Message, Misc};
+    use hbb_common::tokio::time::Instant;
+    use std::sync::Arc;
+
+    let Some(tx) = tx else { return };
+    let mut misc = Misc::new();
+    misc.set_chat_message(ChatMessage {
+        text: format!("uu:unlock-state:{status}"),
+        ..Default::default()
+    });
+    let mut msg_out = Message::new();
+    msg_out.set_misc(misc);
+    // The connection can drop while we type; tolerate the send error.
+    let _ = tx.send((Instant::now(), Arc::new(msg_out)));
+}
+
 #[cfg(not(windows))]
-pub fn request_unlock(_password: String) {}
+pub fn request_unlock(_password: String, _tx: Option<crate::server::Sender>) {}
 
 #[cfg(windows)]
 fn run(password: &str) -> String {

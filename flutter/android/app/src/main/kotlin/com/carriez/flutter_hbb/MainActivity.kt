@@ -24,6 +24,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.media.AudioManager
 import android.media.MediaCodecInfo
 import android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
 import android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
@@ -156,7 +157,30 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private val volumeController: VolumeController by lazy {
+        VolumeController(getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // The phone's own volume buttons must control the phone, not the
+        // remote machine. If left to super they reach the Flutter engine, which
+        // forwards consumer volume keys to the host, so consume them here.
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> {
+                    volumeController.raiseVolume(null, true, AudioManager.STREAM_SYSTEM)
+                    return true
+                }
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    volumeController.lowerVolume(null, true, AudioManager.STREAM_SYSTEM)
+                    return true
+                }
+                KeyEvent.KEYCODE_VOLUME_MUTE -> {
+                    volumeController.toggleMute(true, AudioManager.STREAM_SYSTEM)
+                    return true
+                }
+            }
+        }
         if (event.action == KeyEvent.ACTION_DOWN &&
             KeyEvent.isModifierKey(event.keyCode) && currentFocus == null) {
             // Android can drop modifier-first input when the native view has no focus.

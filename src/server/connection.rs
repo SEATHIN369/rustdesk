@@ -75,6 +75,15 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
+/// Lock intent recorded from the client's `lock_after_session_end` option.
+///
+/// A session that ends because the link died never reaches the
+/// `on_close(lock = true)` path (write failures call `on_close(.., false)`), so
+/// the last remote connection's `Drop` consumes this flag to lock anyway.
+/// Reconnects keep the remote count above zero until the replacement is
+/// registered, so the flag is only consumed once the session truly ends.
+static LOCK_ON_DISCONNECT_INTENT: AtomicBool = AtomicBool::new(false);
+
 mod trusted_devices;
 
 const FAILURE_IDX_ID_WHITELIST: usize = 2;
@@ -4836,8 +4845,20 @@ impl Connection {
                     let mut msg_out = Message::new();
                     msg_out.set_misc(misc);
                     self.send(msg_out).await;
+                } else if cmd == "lock?" {
+                    // Let the client gate privacy on the host actually being
+                    // unlocked: a display commit is rejected at the lock screen.
+                    let state = crate::platform::windows::lock_screen_state().0;
+                    let mut misc = Misc::new();
+                    misc.set_chat_message(ChatMessage {
+                        text: format!("uu:lock-state:{}", state),
+                        ..Default::default()
+                    });
+                    let mut msg_out = Message::new();
+                    msg_out.set_misc(misc);
+                    self.send(msg_out).await;
                 } else {
-                    crate::host_controls::handle_command(cmd, t.on);
+                    crate::host_controls::handle_command(cmd, t.on, self.inner.tx.clone());
                 }
             }
             return;
@@ -4977,6 +4998,9 @@ impl Connection {
         if let Ok(q) = o.lock_after_session_end.enum_value() {
             if q != BoolOption::NotSet {
                 self.lock_after_session_end = q == BoolOption::Yes;
+                if self.keyboard {
+                    LOCK_ON_DISCONNECT_INTENT.store(self.lock_after_session_end, Ordering::SeqCst);
+                }
             }
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -5357,6 +5381,9 @@ impl Connection {
             && self.keyboard
             && !raii::AuthedConnID::session_reconnected(self.inner.id(), &self.session_key())
         {
+            // Consume the flag so the Drop of this (graceful) close does not
+            // lock a second time.
+            LOCK_ON_DISCONNECT_INTENT.store(false, Ordering::SeqCst);
             #[cfg(target_os = "macos")]
             privacy_mode::macos::turn_off_before_lock(self.inner.id());
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -6972,6 +6999,11 @@ mod raii {
             sender: mpsc::UnboundedSender<Data>,
             lr: LoginRequest,
         ) -> Self {
+            if conn_type == AuthConnType::Remote {
+                // Each new remote connection starts clean; the client re-sends
+                // `lock_after_session_end` via handle_option after auth.
+                LOCK_ON_DISCONNECT_INTENT.store(false, Ordering::SeqCst);
+            }
             let printer = conn_type == crate::server::AuthConnType::Remote
                 && crate::is_support_remote_print(&lr.version)
                 && lr.my_platform == hbb_common::whoami::Platform::Windows.to_string();
@@ -7139,6 +7171,12 @@ mod raii {
                     // Always restore the physical screen on disconnect; keeping
                     // it off was judged too dangerous.
                     let _ = virtual_display_manager::reset_all();
+                    // Cover accidental disconnects (network fluctuation): the
+                    // graceful `on_close` path above already consumed the flag,
+                    // so a true here means the link died without it.
+                    if LOCK_ON_DISCONNECT_INTENT.swap(false, Ordering::SeqCst) {
+                        crate::platform::lock_screen();
+                    }
                 }
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote || self.1 == AuthConnType::ViewCamera {

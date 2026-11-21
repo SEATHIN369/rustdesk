@@ -171,6 +171,11 @@ class UuState {
   // Bumped when the host reports state over the reverse chat channel so the
   // chrome (which reads persisted intents non-reactively) rebuilds.
   final hostStateVersion = 0.obs;
+  // Host-reported lock-screen state over the reverse channel:
+  // null = unknown/old host, otherwise 0|1|2|-1 (2 = at lock screen).
+  final RxnInt hostLockState = RxnInt();
+  // Host-reported auto-unlock outcome: null / 'success' / 'skipped' / 'failed'.
+  final RxnString hostUnlockState = RxnString();
   // Master switch for the floating virtual keys (按键映射). When off the keys
   // overlay is hidden; scheme selection only changes which keys are configured,
   // it does not enable/disable mapping.
@@ -183,6 +188,13 @@ class UuState {
       final muted = text.substring('uu:mute-state:'.length) == '1';
       bind.mainSetLocalOption(
           key: uuHostIntentKey('mute', peerId), value: muted ? '1' : '0');
+      hostStateVersion.value++;
+    } else if (text.startsWith('uu:lock-state:')) {
+      hostLockState.value =
+          int.tryParse(text.substring('uu:lock-state:'.length));
+      hostStateVersion.value++;
+    } else if (text.startsWith('uu:unlock-state:')) {
+      hostUnlockState.value = text.substring('uu:unlock-state:'.length);
       hostStateVersion.value++;
     }
   }
@@ -244,6 +256,8 @@ class UuState {
     drawerPage.value = null;
     editLayout.value = false;
     imeVisible.value = false;
+    hostLockState.value = null;
+    hostUnlockState.value = null;
   }
 }
 

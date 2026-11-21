@@ -359,7 +359,13 @@ pub fn on_all_connections_closed() {
 }
 
 /// Handles `uu:<cmd>` payloads. Returns true when the key was consumed.
-pub fn handle_command(key: &str, on: bool) -> bool {
+/// `tx` is the calling connection's outbound channel, used to report the
+/// auto-unlock outcome back to that client over the reverse chat channel.
+pub fn handle_command(
+    key: &str,
+    on: bool,
+    tx: Option<crate::server::Sender>,
+) -> bool {
     match key {
         "mute" => {
             set_mute(on);
@@ -375,7 +381,7 @@ pub fn handle_command(key: &str, on: bool) -> bool {
                     .ok()
                     .and_then(|bytes| String::from_utf8(bytes).ok())
                 {
-                    Some(password) => crate::auto_unlock::request_unlock(password),
+                    Some(password) => crate::auto_unlock::request_unlock(password, tx),
                     None => hbb_common::log::warn!("Auto unlock: invalid payload"),
                 }
                 return true;

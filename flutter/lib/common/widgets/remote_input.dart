@@ -61,9 +61,9 @@ bool isSpecialHoldDragActive = false;
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 
 const double _kTwoFingerIntentScrollAngleDeg = 30;
-const double _kTwoFingerIntentZoomAngleDeg = 130;
+const double _kTwoFingerIntentZoomAngleDeg = 140;
 const double _kTwoFingerIntentMinSamplePx = 8;
-const double _kTwoFingerIntentMinSpreadPx = 10;
+const double _kTwoFingerIntentMinSpreadPx = 16;
 const int _kTwoFingerIntentMinSamples = 4;
 const int _kTwoFingerIntentWarmupUs = 30 * 1000;
 const int _kTwoFingerIntentWindowUs = 100 * 1000;
@@ -606,7 +606,11 @@ class _RawTouchGestureDetectorRegionState
     final angle = acos(cos) * 180 / pi;
     final spreadDelta =
         ((last1 - last2).distance - (start1 - start2).distance).abs();
-    if (angle > _kTwoFingerIntentZoomAngleDeg ||
+    // Zoom needs BOTH diverging movement and an actual spread change; a
+    // two-finger swipe keeps the fingers roughly parallel (angle stays small)
+    // even when they drift apart, so requiring the AND stops it being
+    // misread as a pinch. Anything near-parallel votes scroll.
+    if (angle > _kTwoFingerIntentZoomAngleDeg &&
         spreadDelta >= _kTwoFingerIntentMinSpreadPx) {
       _intentZoomVotes++;
     } else if (angle < _kTwoFingerIntentScrollAngleDeg) {

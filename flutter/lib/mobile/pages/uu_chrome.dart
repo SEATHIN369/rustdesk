@@ -45,9 +45,17 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   Timer? _privacyStartTimer;
   Timer? _privacyRetryTimer;
   Timer? _privacyFailTimer;
+  Timer? _privacyProbeTimer;
+  Timer? _privacyAwaitTimer;
   Timer? _mutePendingTimer;
   bool? _privacyPendingOn;
   bool _privacyPreplugged = false;
+  // The ON request is gated on the host being unlocked: while the host sits at
+  // the lock screen Windows rejects the display commit, so we wait for the
+  // unlock instead of letting the fail timer flip the switch off.
+  bool _privacyAwaitUnlock = false;
+  bool _privacyCommitted = false;
+  bool _privacyAuto = false;
   // True while auto-recovering privacy after reconnect: a display commit
   // rejected at the lock screen must not flip the switch off, so the tile
   // keeps showing on until the host is unlocked and privacy commits.
@@ -57,10 +65,16 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   Worker? _railWorker;
   Worker? _hostStateWorker;
   Worker? _peerReadyWorker;
+  Worker? _lockWorker;
+  Worker? _unlockWorker;
   bool _faded = false;
   final Set<String> _expanded = {};
   String? _imageQuality;
   bool _imageQualityLoaded = false;
+
+  // Unique collapse key for the "其他设置" expansion inside the operation
+  // card, so it never collides with a _groupCard title sharing _expanded.
+  static const String _kKeymapMoreKey = 'op-keymap-more';
 
   @override
   void initState() {
@@ -83,8 +97,14 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       _privacyStartTimer?.cancel();
       _privacyRetryTimer?.cancel();
       _privacyFailTimer?.cancel();
+      _privacyProbeTimer?.cancel();
+      _privacyAwaitTimer?.cancel();
       if (state.isNotEmpty) _privacyAutoRecovering = false;
-      setState(() => _privacyPendingOn = null);
+      setState(() {
+        _privacyPendingOn = null;
+        _privacyAwaitUnlock = false;
+        _privacyCommitted = false;
+      });
     });
     _restorePrivacyIntent();
     _poke();
@@ -92,6 +112,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _hostStateWorker = ever(uuState.hostStateVersion, (_) {
       if (mounted) setState(() {});
     });
+    _lockWorker = ever(uuState.hostLockState, (int? s) => _onLockState(s));
+    _unlockWorker =
+        ever(uuState.hostUnlockState, (String? st) => _onUnlockState(st));
     _peerReadyWorker = ever(gFFI.ffiModel.pi.isSet, (bool set) {
       if (set) _queryHostMute();
     });
@@ -156,11 +179,15 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _privacyStartTimer?.cancel();
     _privacyRetryTimer?.cancel();
     _privacyFailTimer?.cancel();
+    _privacyProbeTimer?.cancel();
+    _privacyAwaitTimer?.cancel();
     _mutePendingTimer?.cancel();
     _privacyWorker?.dispose();
     _railWorker?.dispose();
     _hostStateWorker?.dispose();
     _peerReadyWorker?.dispose();
+    _lockWorker?.dispose();
+    _unlockWorker?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -291,9 +318,92 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       });
       return;
     }
+    _privacyProbeTimer?.cancel();
+    _privacyAwaitTimer?.cancel();
+    _privacyAwaitUnlock = false;
+    _privacyCommitted = false;
+    _privacyAuto = auto;
+    // ON must not race the lock screen: first ask the host whether it is
+    // unlocked, then commit the physical screen-off once it is.
+    uuState.hostLockState.value = null;
+    uuState.hostUnlockState.value = null;
+    _sendHostCmd('lock?', true);
+    _privacyProbeTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
+      if (uuState.hostLockState.value == null) {
+        // Host has no lock? support (older build) -> fall back to the direct
+        // flow rather than hang waiting for a reply that will never come.
+        _commitPrivacyOn();
+      }
+    });
+  }
+
+  void _onLockState(int? s) {
+    if (_privacyPendingOn != true || _privacyCommitted) return;
+    if (s == null) return; // probe timeout handles the old-host case
+    _privacyProbeTimer?.cancel();
+    if (s == 2) {
+      // At the lock screen: Windows rejects the display commit here, so wait
+      // for the unlock (kick it off if configured) instead of arming the
+      // flip-off fail timer.
+      setState(() => _privacyAwaitUnlock = true);
+      _privacyPreplugged = false;
+      _triggerAutoUnlockIfNeeded();
+      _privacyAwaitTimer?.cancel();
+      _privacyAwaitTimer = Timer(const Duration(seconds: 45), () {
+        if (!mounted || _privacyPendingOn != true || !_privacyAwaitUnlock) {
+          return;
+        }
+        setState(() {
+          _privacyAwaitUnlock = false;
+          _privacyPendingOn = null;
+        });
+        if (!_privacyAuto) showToast('被控端仍处于锁屏，防窥已取消');
+      });
+      return;
+    }
+    // Desktop is reachable -> commit now.
+    _privacyAwaitUnlock = false;
+    _commitPrivacyOn();
+  }
+
+  void _onUnlockState(String? st) {
+    if (_privacyPendingOn != true || !_privacyAwaitUnlock || _privacyCommitted) {
+      return;
+    }
+    if (st == 'success' || st == 'skipped') {
+      _privacyAwaitTimer?.cancel();
+      setState(() => _privacyAwaitUnlock = false);
+      _commitPrivacyOn();
+    }
+    // 'failed': keep waiting; the user may unlock by hand. The 45 s await
+    // timer decides when to give up.
+  }
+
+  // Re-send the auto-unlock command so the host can leave the lock screen,
+  // mirroring remote_page's first-frame path. No-op when not configured or the
+  // host lacks the capability.
+  Future<void> _triggerAutoUnlockIfNeeded() async {
+    final sid = gFFI.sessionId;
+    final cfg = AutoUnlockConfig.load(widget.id);
+    if (cfg['on'] != true) return;
+    final additions = gFFI.ffiModel.pi.platformAdditions;
+    if (additions['uu_auto_unlock'] != true) return;
+    final pwd = await AutoUnlockConfig.password(cfg);
+    if (pwd == null || pwd.isEmpty || !mounted || gFFI.sessionId != sid) return;
+    bind.sessionTogglePrivacyMode(
+        sessionId: sid,
+        implKey: 'uu:unlock:${base64Encode(utf8.encode(pwd))}',
+        on: true);
+  }
+
+  void _commitPrivacyOn() {
+    if (!mounted || _privacyPendingOn != true) return;
+    _privacyCommitted = true;
     // turn_on only waits 5s for the virtual display to appear, but Amyuni's
     // monitor needs ~6s to reach ACTIVE. Plug it first so the server-side
     // check finds it instead of racing.
+    final auto = _privacyAuto;
     final preplug = gFFI.ffiModel.pi.isAmyuniIdd;
     final hadVirtualDisplay =
         gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty;
@@ -319,11 +429,17 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         requestPrivacy();
       }
     });
+    // Only armed now that the host is confirmed unlocked, so a lock-screen
+    // rejection can no longer flip the switch off mid-wait.
     _privacyFailTimer = Timer(Duration(seconds: auto ? 8 : 20), () {
       if (!mounted || _privacyPendingOn != true) return;
       if (PrivacyModeState.find(widget.id).value.isEmpty) {
         debugPrint(
             '[uu-diag] privacy ON fail-timer fired, state still empty (auto=$auto)');
+        setState(() {
+          _privacyCommitted = false;
+          _privacyPendingOn = null;
+        });
         if (auto) {
           // A commit rejected at the lock screen may leave the virtual display
           // unplugged; allow the next round to pre-plug again. Keep the intent
@@ -333,9 +449,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
           bind.sessionToggleVirtualDisplay(
               sessionId: gFFI.sessionId, index: 0, on: false);
           _privacyPreplugged = false;
-        }
-        setState(() => _privacyPendingOn = null);
-        if (!auto) {
           showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
         }
       }
@@ -352,6 +465,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 
   void _openKeyboard() {
     uuState.railOpen.value = false;
+    uuState.drawerPage.value = null;
     uuState.keyboardOpen.value = true;
   }
 
@@ -459,7 +573,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       child: GestureDetector(
         onTap: () {
           _poke();
-          uuState.railOpen.value = true;
+          _openDrawer('menu');
         },
         onPanStart: (_) => _poke(),
         onPanUpdate: (d) {
@@ -493,81 +607,84 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     );
   }
 
-  // UU-style expanded rail: no background panel, four items spread over the
-  // full right edge; tapping anywhere else collapses it.
-  Widget _rail() {
+  // UU-style right-edge icon rail: no background panel, four items spread over
+  // the full right edge. Tap-outside to dismiss is owned by the drawer/keyboard
+  // barriers, so this column itself adds no full-screen gesture layer and can
+  // sit on top of the open drawer.
+  Widget _railColumn() {
     final isPeerAndroid = gFFI.ffiModel.isPeerAndroid;
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () => uuState.railOpen.value = false,
+    return Positioned(
+      top: 0,
+      bottom: 0,
+      right: 0,
+      width: 72,
+      child: Column(
+        children: [
+          // Each item owns a full quarter of the right edge, not just
+          // the small icon area.
+          Expanded(child: _railItem(Icons.tune, '操作', () => _openDrawer('menu'))),
+          Expanded(child: _railItem(Icons.keyboard, '键盘', _openKeyboard)),
+          Expanded(
+              child: _railItem(
+                  Icons.desktop_windows, '显示桌面', () => _sendWinCombo('VK_D'))),
+          Expanded(
+            child: _railItem(
+                isPeerAndroid ? Icons.build : Icons.grid_view,
+                isPeerAndroid ? '更多操作' : '所有窗口',
+                () => isPeerAndroid
+                    ? gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
+                    : _sendWinCombo('VK_TAB')),
           ),
-        ),
-        Positioned(
-          top: 0,
-          bottom: 0,
-          right: 0,
-          width: 72,
-          child: Column(
-            children: [
-              // Each item owns a full quarter of the right edge, not just
-              // the small icon area.
-              Expanded(
-                  child: _railItem(Icons.tune, '操作', () => _openDrawer('menu'))),
-              Expanded(child: _railItem(Icons.keyboard, '键盘', _openKeyboard)),
-              Expanded(
-                  child: _railItem(Icons.desktop_windows, '显示桌面',
-                      () => _sendWinCombo('VK_D'))),
-              Expanded(
-                child: _railItem(
-                    isPeerAndroid ? Icons.build : Icons.grid_view,
-                    isPeerAndroid ? '更多操作' : '所有窗口',
-                    () => isPeerAndroid
-                        ? gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
-                        : _sendWinCombo('VK_TAB')),
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (uuState.keyboardOpen.value || uuState.editLayout.value) {
-        return const SizedBox.shrink();
-      }
-      if (uuState.drawerPage.value != null) {
-        return _drawer(context);
-      }
-      if (uuState.railOpen.value) {
-        return _rail();
-      }
-      return _edgeButton(MediaQuery.of(context).size);
+      // Editing a scheme needs the whole canvas for dragging floating keys, so
+      // chrome is fully hidden then. Otherwise the three layers coexist:
+      // the operation drawer, the always-visible right-edge icon rail, and the
+      // minimized tool ball (only when nothing is open). The keyboard sheet is
+      // a sibling of this widget in the remote page, so opening it no longer
+      // hides the rail/drawer.
+      if (uuState.editLayout.value) return const SizedBox.shrink();
+      final drawer = uuState.drawerPage.value;
+      final iconsVisible = drawer != null || uuState.railOpen.value;
+      final size = MediaQuery.of(context).size;
+      return Stack(
+        children: [
+          if (drawer != null) _drawer(context),
+          if (iconsVisible) _railColumn(),
+          if (drawer == null && !uuState.railOpen.value) _edgeButton(size),
+        ],
+      );
     });
   }
 
   Widget _drawer(BuildContext context) {
     final page = uuState.drawerPage.value ?? 'menu';
-    final width = min(430.0, MediaQuery.of(context).size.width * 0.55);
+    // Leave the right-edge icon rail column (72 px) uncovered so the two
+    // coexist; cap the width so it stays usable on small phones.
+    final width = min(430.0, (MediaQuery.of(context).size.width - 72) * 0.6);
     final titles = {
       'menu': '操作',
-      'keymap': '按键映射',
       'schemes': '操控方案',
       'gestures': '手势与触摸',
     };
     final parent = _parentPage(page);
     return Stack(
       children: [
-        // Tapping outside the drawer equals Back (one level up).
         // Tapping outside the drawer equals Back (one level up). Translucent so
         // drags still reach the canvas underneath instead of blocking the
-        // remote mouse while the panel is open.
-        Positioned.fill(
+        // remote mouse while the panel is open. The region stops at the right
+        // edge rail (72 px) so the rail icons stay tappable while the drawer is up.
+        Positioned(
+          left: 0,
+          top: 0,
+          bottom: 0,
+          right: 72,
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: () {
@@ -578,7 +695,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         Positioned(
           top: 0,
           bottom: 0,
-          right: 0,
+          right: 72,
           width: width,
           child: Material(
         color: const Color(0xF22C2C2E),
@@ -609,11 +726,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
               Expanded(
                 child: page == 'menu'
                     ? _menuPage(context)
-                    : page == 'keymap'
-                        ? _keymapPage(context)
-                        : page == 'schemes'
-                            ? _schemesPage(context)
-                            : _gesturesPage(context),
+                    : page == 'schemes'
+                        ? _schemesPage(context)
+                        : _gesturesPage(context),
               ),
             ],
           ),
@@ -624,11 +739,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     );
   }
 
-  // Hierarchical back: schemes sits under keymap, everything else under menu.
+  // Hierarchical back: the operation card (menu) is the only top-level page;
+  // schemes/gestures were opened from it, so back returns to the menu, and
+  // back from the menu closes the drawer.
   String? _parentPage(String page) {
     switch (page) {
-      case 'schemes':
-        return 'keymap';
       case 'menu':
         return null;
       default:
@@ -964,6 +1079,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         return _PrivacyModeTile(
           on: on,
           pending: _privacyPendingOn,
+          awaitUnlock: _privacyAwaitUnlock,
           recovering: _privacyAutoRecovering && _hostIntent('privacy'),
           supported: _privacySupported(),
           onChanged: _togglePrivacy,
@@ -1025,52 +1141,77 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 
   List<Widget> _peripheralRows() {
     return [
-      _navRow(Icons.keyboard_alt_outlined, '启用按键映射', () {
-        uuState.drawerPage.value = 'keymap';
-      }),
       _navRow(Icons.touch_app_outlined, '手势与触摸', () {
         uuState.drawerPage.value = 'gestures';
       }),
     ];
   }
 
-  Widget _keymapPage(BuildContext context) {
+  // UU-style keymap section: a master switch inside the operation card that
+  // inline-expands three rows when on. This replaces the old second-level
+  // "启用按键映射" page; the real gate is uuState.keyMapEnabled (floating keys).
+  Widget _keymapMasterRow() {
+    return Obx(() => SwitchListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          secondary: const Icon(Icons.keyboard_alt_outlined,
+              color: Colors.white70, size: 20),
+          title: const Text('启用按键映射',
+              style: TextStyle(color: Colors.white, fontSize: 13)),
+          subtitle: Text(
+              uuState.keyMapEnabled.value
+                  ? '悬浮键已启用，点击即发送到电脑'
+                  : '已关闭，悬浮键隐藏（方案配置保留）',
+              style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          value: uuState.keyMapEnabled.value,
+          onChanged: (v) {
+            uuState.keyMapEnabled.value = v;
+            uuState.save();
+          },
+        ));
+  }
+
+  Widget _keymapExpanded() {
     final scheme = uuState.active;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+    final moreOpen = _expanded.contains(_kKeymapMoreKey);
+    return Column(
       children: [
-        _card(Obx(() => SwitchListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              secondary: const Icon(Icons.keyboard_alt_outlined,
-                  color: Colors.white70, size: 20),
-              title: const Text('启用按键映射',
-                  style: TextStyle(color: Colors.white, fontSize: 13)),
-              subtitle: Text(
-                  uuState.keyMapEnabled.value
-                      ? '悬浮键已启用，点击即发送到电脑'
-                      : '已关闭，悬浮键隐藏（方案配置保留）',
-                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
-              value: uuState.keyMapEnabled.value,
-              onChanged: (v) {
-                uuState.keyMapEnabled.value = v;
-                uuState.save();
-              },
-            ))),
-        const SizedBox(height: 12),
-        _card(Column(
-          children: [
-            _navRow(Icons.gamepad_outlined, '虚拟按键方案', () {
+        Obx(() => _navRow(Icons.swap_horiz, '切换操控方案', () {
               uuState.drawerPage.value = 'schemes';
-            }),
-            _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
-              scheme.keyScale = v;
-            }),
-            _toggleRow('点击按键时震动', scheme.haptics, (v) {
-              scheme.haptics = v;
-            }),
-          ],
-        )),
+            }, subtitle: '当前方案：${uuState.activeName.value}')),
+        _navRow(Icons.edit_outlined, '编辑当前方案', () {
+          uuState.activeName.value = scheme.name;
+          uuState.drawerPage.value = null;
+          uuState.keyboardOpen.value = false;
+          uuState.editLayout.value = true;
+          uuState.save();
+        }),
+        _navRow(Icons.tune, '其他设置', () {
+          setState(() {
+            if (!_expanded.remove(_kKeymapMoreKey)) {
+              _expanded.add(_kKeymapMoreKey);
+            }
+          });
+        }),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          alignment: Alignment.topCenter,
+          clipBehavior: Clip.hardEdge,
+          child: Align(
+            alignment: Alignment.topCenter,
+            heightFactor: moreOpen ? 1 : 0,
+            child: Column(
+              children: [
+                _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
+                  scheme.keyScale = v;
+                }),
+                _toggleRow('点击按键时震动', scheme.haptics, (v) {
+                  scheme.haptics = v;
+                }),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -1089,19 +1230,29 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   }
 
   Widget _menuPage(BuildContext context) {
-    final operationRows = <Widget>[
-      if (!gFFI.ffiModel.isPeerAndroid) _touchPointerRow(),
-    ];
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       children: [
         _actionBar(),
         const SizedBox(height: 20),
-        if (operationRows.isNotEmpty) ...[
-          _sectionLabel('操作'),
-          _card(Column(children: operationRows)),
-          const SizedBox(height: 12),
-        ],
+        _sectionLabel('操作'),
+        _card(Column(
+          children: [
+            _keymapMasterRow(),
+            Obx(() => AnimatedSize(
+                  duration: const Duration(milliseconds: 180),
+                  alignment: Alignment.topCenter,
+                  clipBehavior: Clip.hardEdge,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    heightFactor: uuState.keyMapEnabled.value ? 1 : 0,
+                    child: _keymapExpanded(),
+                  ),
+                )),
+            if (!gFFI.ffiModel.isPeerAndroid) _touchPointerRow(),
+          ],
+        )),
+        const SizedBox(height: 12),
         _groupCard('显示', Icons.monitor_outlined, _displayRows()),
         _groupCard('安全', Icons.shield_outlined, _securityRows()),
         _groupCard('外设', Icons.usb, _peripheralRows()),
@@ -1355,6 +1506,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 class _PrivacyModeTile extends StatelessWidget {
   final bool on;
   final bool? pending;
+  final bool awaitUnlock;
   final bool recovering;
   final bool supported;
   final ValueChanged<bool> onChanged;
@@ -1362,6 +1514,7 @@ class _PrivacyModeTile extends StatelessWidget {
   const _PrivacyModeTile({
     required this.on,
     required this.pending,
+    required this.awaitUnlock,
     required this.recovering,
     required this.supported,
     required this.onChanged,
@@ -1369,7 +1522,9 @@ class _PrivacyModeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = pending != null
+    final spinning = pending != null;
+    final awaitText = (spinning && awaitUnlock) || recovering;
+    final subtitle = spinning
         ? Row(children: [
             const SizedBox(
               width: 10,
@@ -1378,10 +1533,10 @@ class _PrivacyModeTile extends StatelessWidget {
                   strokeWidth: 2, color: Colors.white70),
             ),
             const SizedBox(width: 8),
-            Text(pending! ? '正在开启…' : '正在关闭…',
+            Text(awaitUnlock ? '等待被控端解锁后自动开启' : (pending! ? '正在开启…' : '正在关闭…'),
                 style: const TextStyle(color: Colors.white54, fontSize: 11)),
           ])
-        : recovering
+        : awaitText
             ? const Text('等待被控端解锁后自动开启',
                 style: TextStyle(color: Colors.white54, fontSize: 11))
             : supported
@@ -1395,7 +1550,7 @@ class _PrivacyModeTile extends StatelessWidget {
       title: const Text('操控时物理关屏（虚拟屏防窥）',
           style: TextStyle(color: Colors.white, fontSize: 13)),
       subtitle: subtitle,
-      value: pending ?? (recovering || on),
+      value: pending ?? (awaitUnlock || recovering || on),
       onChanged: onChanged,
     );
   }

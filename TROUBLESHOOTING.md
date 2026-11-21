@@ -426,3 +426,47 @@ TogglePrivacyMode misc（ui_session_interface.rs:404），**不本地置选项**
 
 产物：APK `4A243C30`（29,290,782 B，152.1s，00:15）；主机 DLL 无改动仍 `E047F868`、
 主机测试包仍 23:35 版 `21CDA2A0`（不重编 DLL、不重启服务）。待真机复测光标无灰罩无重影 + 四修复回归。
+
+## 案例：UU 化七项改造（解锁门控 / 意外断连锁屏 / 音量键 / 双指偏滑动 / 就地展开 / 一步关 IME / 工具球共处）（2026-11-22 02:29）
+
+### 锁屏期 `ChangeDisplaySettingsEx` 被拒 → 防窥先发 `uu:lock?` 确认解锁再提交
+
+**现象**：锁屏时手动开防窥秒跳关；上一轮 T46 物理关屏成功但手机按钮切不过去，怀疑主机 commit 与锁屏时序纠缠。
+**根因**：Windows 在 Winlogon 安全桌面拒绝改显示模式，防窥 commit 必失败；客户端 20s 失败定时器无差别把开关翻 OFF，用户看到「还没解锁就关掉」。
+**正确写法（闭环回报）**：
+- 主机 `connection.rs::toggle_privacy_mode` uu: 分支新增 `cmd=="lock?"` → 读 `crate::platform::windows::lock_screen_state().0`（0/1/2/-1），经 `Misc::set_chat_message` 回 `uu:lock-state:<N>`（复用聊天反向通道，官方 .so 会转 Dart `handleHostMessage`，不改 `src/client/*`）。
+- 自动解锁回报跨线程：`handle_command(cmd,on,self.inner.tx.clone())` 透传 `Sender`，`auto_unlock::run()` 结束后按 outcome 前缀（success/done→success、skipped→skipped、其余→failed）用 tx 推 `uu:unlock-state:<status>`；`tx.send` 在连接已 drop 时返回 Err，`let _ =` 忽略。
+- 客户端 `_togglePrivacy(true)` 先 `_sendHostCmd('lock?',true)`，`ever(hostLockState)`：state 2 → 置 `_privacyAwaitUnlock`、触发 `uu:unlock:`、起 45s 预算、**不挂失败定时器**；state≠2 → `_commitPrivacyOn()`。`ever(hostUnlockState)` success/skipped → commit，failed → 继续等。失败定时器只在 `_commitPrivacyOn`（已确认解锁）内挂（auto 8s/手动 20s）。旧主机无 `lock?`：3s 探测超时且 `hostLockState==null` → 直接 `_commitPrivacyOn()` 回退旧流程。
+
+### `on_close(lock=false)` 不锁 → `AuthedConnID::Drop` remote_count==0 补锁
+
+**现象**：勾了「退出远控锁定电脑」，正常退出会锁；网络波动/拔网线致手机掉线则不锁。
+**根因**：只有显式 Close 走 `on_close(.., lock=true)`；写失败路径 `conn.stream.send` 报错走 `on_close(&err, false)` 不加锁。
+**正确写法**：`handle_option` 收到 `lock_after_session_end==Yes` 且 `self.keyboard` → 写会话级 `static LOCK_ON_DISCONNECT_INTENT: AtomicBool`（每个新 Remote `AuthedConnID::new` 先 `store(false)`，防跨会话残留）；`AuthedConnID::Drop` 的 `remote_count==0` windows 块 `swap(false)` 消费该标志并 `crate::platform::lock_screen()`。优雅退出的 `on_close` 锁屏块先 `store(false)` 消费，避免与 Drop 双锁。**竞态安全**：重连在旧连接 Drop 前注册新连接 → `remote_count` 不归 0 → 不误锁。限制：意图为全局近似（单手机控单主机正确，并发多会话精确归属留后续）。
+
+### 音量键经 Flutter 管线转发主机 → Kotlin `dispatchKeyEvent` 本地拦截
+
+**现象**：远控中按手机音量键改的是电脑音量。
+**根因**：`KEYCODE_VOLUME_*` 进 Flutter key 管线→`input_model` 恒 handled→转发主机；`InputService.kt` 的 `tryHandleVolumeKeyEvent`/`VolumeController` 只覆盖 USB-OTG 外接键盘。
+**正确写法**：`MainActivity.dispatchKeyEvent` 在 `super`（会路由给 Flutter）之前拦截 ACTION_DOWN `VOLUME_UP/DOWN/MUTE`，用本机 `VolumeController(getSystemService(AUDIO_SERVICE) as AudioManager)` 调 `raiseVolume/lowerVolume/toggleMute(null,true,STREAM_SYSTEM)` 后 `return true`，事件不再进 Flutter。
+
+### 双指缩放 OR 判定在双手滑动时误判 → 改 AND + 提阈值
+
+**现象**：双手做滑动动作常被误判成缩放。
+**根因**：投票条件 `angle>zoomAngle || spreadDelta>=minSpread`，滑动时两指自然张开（spreadDelta 达标）即投缩放票。
+**正确写法**（SEA369-owned `remote_input.dart`）：改 AND `angle>140 && spreadDelta>=16` 才投缩放票、`angle<30` 投滚动票；阈值 `minSpread` 10→16、`zoomAngle` 130→140（温和收紧）。`MinSamples=4` 与终局默认滚动 tie-break 不变。改前需同步 SEA369。
+
+### 首屏/工具球 IA：就地展开、一步直达共处、一步关 IME
+
+- **按键映射改回就地展开**：撤销上一轮 `_keymapPage` 独立二级页；「操作」卡顶部 `keyMapEnabled` 总开关，ON 用 `AnimatedSize` 就地展开三行（切方案/编辑/其他设置→放大滑杆+震动），外设组只剩手势与触摸，抽屉返回层级 schemes→menu。
+- **工具球一步直达 + 与右缘图标共处**：`build` Stack 优先级 `editLayout>drawer>rail>球`，`keyboardOpen` 不再一票否决隐藏 chrome；`_edgeButton.onTap`→`_openDrawer('menu')`（一步展开，不再先亮图标列）；`_railColumn` 去掉自带全屏 barrier；抽屉与键盘 sheet 区域让位 `right:72` 不挡图标列；`_openKeyboard` 进入即清 `drawerPage`（修关键盘后旧抽屉重弹）。
+- **IME 一步关**：`remote_page` 键盘点外 barrier 去掉「先收 IME 再点才关」两段式，`onTap` 直接 `keyboardOpen=false`+`_hideIme()`；`drawerPage!=null` 时不渲染键盘 barrier（点外语义交给抽屉），区域收窄 `right:72`、保持 `opaque`。
+
+### 编译坑（本轮 DLL 首编 5 错）
+
+1. `crate::server::connection::Sender` 报 E0603「module connection is private」——`src/server.rs` 用 `mod connection; pub use connection::*;`，对外路径是 **`crate::server::Sender`**。
+2. `self.tx` 报 E0609「no field tx on Connection」——`tx` 是 `ConnInner` 的字段，Connection 经 `self.inner` 持有 → 用 **`self.inner.tx.clone()`**（同文件 send_block_input_error/1819/4124 均如此）。
+3. Sender 元组 `Instant` 报 E0308 类型不符——`connection.rs` 的 `Instant` 是 **`hbb_common::tokio::time::Instant`**（非 std），`report_status` 里 `Instant::now()` 必须用 tokio 版。
+教训重申：wrapper `echo BUILD_EXIT=%ERRORLEVEL%` 后 `> file 2>&1` 的 Git Bash 调用返回 0 是**假象**，必须读 `dll.log` 的 `BUILD_EXIT=`/`error[` 才是真判据（本轮首次「成功」即被 dll.log 打脸）。
+
+产物：主机 DLL `1BE43068`（36,243,968 B，4m37s）已部署并 02:29:39 重启服务无 panic；APK `78466A18`（29,293,498 B，175.9s，02:25）；主机测试包 02:29 版 `FD973798`（34,211,636 B）。部署遇两个 RustDesk.exe 界面进程（7016/11984）锁 `librustdesk.dll`——`Stop-Service` 不杀 GUI，需先 `Stop-Process` 这两个再拷 DLL（本机流程，经用户确认）。

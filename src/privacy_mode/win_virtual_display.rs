@@ -510,8 +510,8 @@ impl PrivacyMode for PrivacyModeImpl {
         let (width, height) = desired_mode();
         allow_err!(crate::platform::change_resolution(
             &primary_display_name,
-            width,
-            height
+            width as usize,
+            height as usize
         ));
         let reg_connectivity_2 = reg_display_settings::read_reg_connectivity()?;
 

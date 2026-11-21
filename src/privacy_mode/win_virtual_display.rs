@@ -496,6 +496,9 @@ impl PrivacyMode for PrivacyModeImpl {
             succeeded: false,
         };
 
+        // Windows applies per-monitor DPI when a monitor is hotplugged, so make
+        // sure the virtual display's scaling entry is in place before plugging.
+        crate::host_controls::apply_dpi_scale_to_active_user();
         guard.ensure_virtual_display(is_async_mode)?;
         if guard.virtual_displays.is_empty() {
             log::debug!("No virtual displays");

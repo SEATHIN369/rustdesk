@@ -86,8 +86,17 @@ flutter build apk --release --target-platform android-arm64
   且手机端 Dart 能直接调用的信道；主机在 `toggle_privacy_mode` 开头拦截 `uu:` 前缀（仍要求已认证远控连接）。
   除 `uu:mute` 外，其它 `uu:` 键不会进入官方防窥逻辑。
 - **静音/关屏长期有效**：最后一个远控连接断开时，若 `privacy_persist` 且正在防窥，跳过
-  `virtual_display_manager::reset_all()`；静音按 `restore_on_disconnect` 决定是否恢复（默认保持）。
-  主机重启后物理屏恢复（安全兜底），静音状态由服务启动时重放。
+  `virtual_display_manager::reset_all()`；静音按 `restore_audio` 决定是否恢复。
+  **两个恢复开关互相独立**（2026-11-21 用户要求）：`uu:restore-audio` 控制断开后是否还原扬声器，
+  `uu:restore-screen` 只同步 `uu:privacy-persist`（断开后是否保持关屏）；旧 `uu:restore` 仍按“两个都设”兼容。
+  旧状态文件里的 `restore_on_disconnect` 会在加载时迁移成这两个字段。主机重启后物理屏恢复（安全兜底），
+  静音状态由服务启动时重放。
+- **虚拟屏真缩放（DPI）**：`uu:scale:100|125|150|175` 不再改分辨率，而是写当前交互用户
+  `HKCU\Control Panel\Desktop\PerMonitorSettings\NOEDID_1414_008B*` 的 `DpiValue`
+  （0/1/2/3 = 100/125/150/175%）。Amyuni 虚拟屏无 EDID，Windows 给它的键名以 `NOEDID_1414_` 开头；
+  服务以 SYSTEM 身份运行，先 `WTSQueryUserToken` 取活动会话用户 SID 再写 `HKU\<SID>`。
+  Windows 在显示器热插拔时读取该值，所以与防窥开关联动：开防窥（插入虚拟屏）时生效，界面文案为“下次开启关屏时生效”。
+  分辨率（`uu:display:WxH`）与缩放相互独立，可组合。
 - **自编译主机 DLL 的部署**：产物 `cargo build --release --lib --features flutter` →
   `target/release/librustdesk.dll`（只替换安装目录同名文件，保留官方 Flutter UI 与资源）。
   官方 DLL 备份为同目录 `librustdesk.dll.official-1.5.3.bak`；替换时先停 `RustDesk` 服务，
@@ -105,7 +114,8 @@ flutter build apk --release --target-platform android-arm64
   “No virtual displays”。客户端流程：先 `sessionToggleVirtualDisplay(index: 0, on: true)` 预插 →
   4s 后发防窥 on → 12s 无变化重发 → 20s 仍失败则回滚预插并提示。开防窥时 `restore()` 会拔掉全部虚拟屏，
   关防窥即恢复物理屏，不需要再手动减屏。**自编译主机版**额外支持：断开后保持关屏（`uu:privacy-persist`）、
-  虚拟屏尺寸预设 `1280×720 / 1536×864（≈125%）/ 1920×1080 / 2560×1440`（`uu:display:WxH`，下次开启生效）。
+  虚拟屏分辨率预设 `1280×720 / 1536×864 / 1920×1080 / 2560×1440`（`uu:display:WxH`，下次开启生效）；
+  真正的显示缩放走 `uu:scale:*`（见上一条 DPI 说明），不要再靠降分辨率冒充。
 - **IME 弹窗**：远控页常驻 `FLAG_ALT_FOCUSABLE_IM`（`remote_page.dart` 的 `enable_soft_keyboard(false)`），
   设置页里的 TextField 因此唤不出系统键盘。`uu_chrome.dart` 的 `_withIme()` 在弹窗前临时放行、关闭后恢复，
   已覆盖方案重命名/新建/Windows 登录密码三个输入框。
@@ -133,8 +143,8 @@ flutter build apk --release --target-platform android-arm64
 |---|---|---|---|
 | A（kitsuneMori96） | 横屏方向翻转、自动解锁改 Seq 通道、防窥预插虚拟屏、静音文案澄清 | `remote_page.dart`、`uu_chrome.dart` | 已提交 80861b9，待真机验证 |
 | A | 打包、构建笔记、被控端日志排查 | — | 进行中（2026-11-21 自编译主机 DLL 已部署，新 APK 构建中） |
-| B（SEA369） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart` | 已合并（PR #1，bab48e7），待真机验证 |
-| B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 待开工，分支 `refactor/action-drawer` |
+| B（SEA369） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart` | 已合并（PR #1，bab48e7）；A 于 2026-11-21 按真机反馈再调参（见 8.2） |
+| B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 已合并（PR #2，40c539d），主机功能（静音/恢复开关/缩放/自动解锁 IME）已重新合入 |
 
 分工边界：A 不碰 `remote_input.dart`，B 不改防窥/自动解锁逻辑；两边都要动 `uu_chrome.dart` 时先在 issue 里对齐。
 各自切分支、PR 回 `local/1.5.3-android`，不要直接推主线。
@@ -158,10 +168,16 @@ flutter build apk --release --target-platform android-arm64
 
 参考依据：Google Android 手势指南「滚动量随手势速度变化（drag/swipe/fling）」；专利 CN113986109B 的双指夹角阈值 0~35° + 至少 6 对采样点；Android 常见 pinch 判定为「两指位移分量相乘为负」。
 
+**2026-11-21 真机反馈调参（A）**：用户反馈「捏合要展到不自然幅度才触发缩小」「快速大范围滑动仍不够快」。
+- 缩放：夹角阈值 150° → **130°**；新增「两指间距累计变化 ≥ 10px」也算缩放票；最少票数 6 → **4**；
+  前 3 帧预热 48ms → **30ms**；窗口结束仍无结论时，若缩放票 ≥ 2 且多于滚动票则锁缩放（原来必须 ≥6）。
+- 滚动：快速档阈值 1200 → **800 px/s**，快速档 20 → **12 px/格**；单帧最多 2 → **5 格**；
+  滚动灵敏度上限 2.0 → **3.0**（`uu_state.dart` 同步放宽 clamp 与滑块）。
+
 ### 8.2 动态滚动灵敏度
 
 - 每次滚动更新取 `focalPointDelta.dy`，维护 EMA 速度 `v = 0.7*v + 0.3*(dy/dt)`；150ms 无事件后 v 衰减归零。
-- 按 |v| 查表换「每格像素」：`<300 px/s → 60px/格`、`300–1200 → 线性 60→35`、`>1200 → 20px/格`，单帧最多 2 格。
+- 按 |v| 查表换「每格像素」：`<300 px/s → 60px/格`、`300–800 → 线性 60→35`、`>800 → 12px/格`，单帧最多 5 格。
 - 积分器保留小数（现有 `_mouseScrollIntegral`），松手清零；参数提成 const 便于真机微调。
 - 验收：galgame 快进连点与浏览器长页面各试一次，慢速能停在指定行，快速甩动不丢步。
 
@@ -247,6 +263,9 @@ P1 = 小窗模式 PiP；P2 = 旋转屏幕（需用户拍板：客户端画布旋
 6. 右缘：四块区域整块可点；点外收起；闲置 4s 淡出。
 7. 操作面板：顶部动作条「退出远控/声音/仅观看」状态色正确；按键映射、屏幕触控/鼠标指针、显示鼠标按键生效；防窥、退出锁屏、自动解锁、虚拟按键方案都在对应分组里且逐一生效；防窥点击瞬间有转圈，先预插虚拟屏、约 4s 后开启，失败会回滚并提示。
 8. 退出会话后：被控端物理屏恢复、声音恢复、未勾选时不锁屏。
+9. 「安全」卡新项：「断开后恢复声音」「断开后恢复屏幕」两个开关互不影响；「显示缩放」选 125% 后，下次开防窥时分辨率不变但界面变大且清晰；「虚拟屏分辨率」与缩放可自由组合。
+10. 手势：快速大范围滑动滚轮要跟手（不再只有慢速档）；常规幅度捏合即可缩放，不必夸张张开；缩放灵敏度滑块最高可到 3.0。
+11. 自动解锁：密码为单个空格时能存住并解锁；密码框有「插入空格」按钮与长度显示，含全角空格会黄字警告。
 
 ## 10. 已知问题
 

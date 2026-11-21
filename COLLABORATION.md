@@ -88,6 +88,13 @@ flutter build apk --release --target-platform android-arm64
 - **静音/关屏长期有效**：最后一个远控连接断开时，若 `privacy_persist` 且正在防窥，跳过
   `virtual_display_manager::reset_all()`；静音按 `restore_on_disconnect` 决定是否恢复（默认保持）。
   主机重启后物理屏恢复（安全兜底），静音状态由服务启动时重放。
+- **自编译主机 DLL 的部署**：产物 `cargo build --release --lib --features flutter` →
+  `target/release/librustdesk.dll`（只替换安装目录同名文件，保留官方 Flutter UI 与资源）。
+  官方 DLL 备份为同目录 `librustdesk.dll.official-1.5.3.bak`；替换时先停 `RustDesk` 服务，
+  可重命名旧 DLL 后拷入新文件（用户会话里的托盘进程不会阻塞服务使用新 DLL），再启动服务。
+  服务端日志出现 `win_virtual_display.rs: Virtual display mode set to ...` 即新代码已加载。
+  注意：自编译版未启用 `hwcodec`（无 ffmpeg/mfx），导出表比官方少
+  `hwcodec_av_log_callback` / `hwcodec_log` 两个 C 符号，Dart 不直接引用；硬件编解码入口显示不可用，属预期。
 - **防窥必须走专用接口**：`bind.sessionTogglePrivacyMode(sessionId, implKey, on)`，
   `implKey = 'privacy_mode_impl_virtual_display'`（来自 `pi.platformAdditions['supported_privacy_mode_impl']` 列表）。
   不要用通用 `toggleOption('privacy-mode')`——只发 option 不翻服务端 config。
@@ -125,8 +132,8 @@ flutter build apk --release --target-platform android-arm64
 | 归属 | 任务 | 涉及文件 | 状态 |
 |---|---|---|---|
 | A（kitsuneMori96） | 横屏方向翻转、自动解锁改 Seq 通道、防窥预插虚拟屏、静音文案澄清 | `remote_page.dart`、`uu_chrome.dart` | 已提交 80861b9，待真机验证 |
-| A | 打包、构建笔记、被控端日志排查 | — | 进行中 |
-| B（SEA369） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart`（必要时 `gestures.dart`） | 待开工，分支 `feat/gesture-intent` |
+| A | 打包、构建笔记、被控端日志排查 | — | 进行中（2026-11-21 自编译主机 DLL 已部署，新 APK 构建中） |
+| B（SEA369） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart` | 已合并（PR #1，bab48e7），待真机验证 |
 | B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 待开工，分支 `refactor/action-drawer` |
 
 分工边界：A 不碰 `remote_input.dart`，B 不改防窥/自动解锁逻辑；两边都要动 `uu_chrome.dart` 时先在 issue 里对齐。

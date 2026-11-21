@@ -61,6 +61,7 @@ bool isSpecialHoldDragActive = false;
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 
 const double _kTwoFingerIntentScrollAngleDeg = 30;
+const double _kTwoFingerIntentZoomAngleDeg = 150;
 const double _kTwoFingerIntentMinSamplePx = 8;
 const int _kTwoFingerIntentMinSamples = 6;
 const int _kTwoFingerIntentWarmupUs = 48 * 1000;
@@ -118,6 +119,9 @@ class _RawTouchGestureDetectorRegionState
   int _intentLastSampleUs = 0;
   int _intentScrollVotes = 0;
   int _intentZoomVotes = 0;
+  Offset? _intentSamplePrev1;
+  Offset? _intentSamplePrev2;
+  double _intentPendingScrollDy = 0;
   Timer? _intentTimer;
   double _scrollVelocity = 0;
   int _lastScrollUs = 0;
@@ -541,6 +545,9 @@ class _RawTouchGestureDetectorRegionState
     _intentLastSampleUs = _intentStartUs;
     _intentScrollVotes = 0;
     _intentZoomVotes = 0;
+    _intentSamplePrev1 = _intentTouchLast[_intentPointers[0]];
+    _intentSamplePrev2 = _intentTouchLast[_intentPointers[1]];
+    _intentPendingScrollDy = 0;
     _twoFingerMode = 0;
     _mouseScrollIntegral = 0;
     _scrollVelocity = 0;
@@ -560,11 +567,25 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (nowUs - _intentLastSampleUs < _kTwoFingerIntentSampleGapUs) return;
+    _intentLastSampleUs = nowUs;
     final start1 = _intentTouchStart[_intentPointers[0]];
     final start2 = _intentTouchStart[_intentPointers[1]];
     final last1 = _intentTouchLast[_intentPointers[0]];
     final last2 = _intentTouchLast[_intentPointers[1]];
-    if (start1 == null || start2 == null || last1 == null || last2 == null) {
+    final prev1 = _intentSamplePrev1;
+    final prev2 = _intentSamplePrev2;
+    if (start1 == null ||
+        start2 == null ||
+        last1 == null ||
+        last2 == null ||
+        prev1 == null ||
+        prev2 == null) {
+      return;
+    }
+    _intentSamplePrev1 = last1;
+    _intentSamplePrev2 = last2;
+    if ((last1 - prev1).distance < _kTwoFingerIntentMinSamplePx ||
+        (last2 - prev2).distance < _kTwoFingerIntentMinSamplePx) {
       return;
     }
     final v1 = last1 - start1;
@@ -573,16 +594,13 @@ class _RawTouchGestureDetectorRegionState
         v2.distance < _kTwoFingerIntentMinSamplePx) {
       return;
     }
-    _intentLastSampleUs = nowUs;
     final dot = v1.dx * v2.dx + v1.dy * v2.dy;
-    if (dot < 0) {
+    final cos = (dot / (v1.distance * v2.distance)).clamp(-1.0, 1.0);
+    final angle = acos(cos) * 180 / pi;
+    if (angle > _kTwoFingerIntentZoomAngleDeg) {
       _intentZoomVotes++;
-    } else {
-      final cos = (dot / (v1.distance * v2.distance)).clamp(-1.0, 1.0);
-      final angle = acos(cos) * 180 / pi;
-      if (angle < _kTwoFingerIntentScrollAngleDeg) {
-        _intentScrollVotes++;
-      }
+    } else if (angle < _kTwoFingerIntentScrollAngleDeg) {
+      _intentScrollVotes++;
     }
     if (_intentZoomVotes >= _kTwoFingerIntentMinSamples) {
       _lockTwoFingerMode(uuState.active.pinchZoom ? 2 : 1);
@@ -617,6 +635,7 @@ class _RawTouchGestureDetectorRegionState
   void _lockTwoFingerMode(int mode) {
     if (_twoFingerMode != 0) return;
     _twoFingerMode = mode;
+    if (mode == 2) _intentPendingScrollDy = 0;
     _intentTimer?.cancel();
     _intentTimer = null;
   }
@@ -629,15 +648,21 @@ class _RawTouchGestureDetectorRegionState
     _intentLastSampleUs = 0;
     _intentScrollVotes = 0;
     _intentZoomVotes = 0;
+    _intentSamplePrev1 = null;
+    _intentSamplePrev2 = null;
+    _intentPendingScrollDy = 0;
     _twoFingerMode = 0;
     _mouseScrollIntegral = 0;
     _scrollVelocity = 0;
     _lastScrollUs = 0;
   }
 
-  void _addScrollDelta(double dy) {
+  void _addScrollDelta(double dy, {double? speedOverride}) {
     final nowUs = _nowUs;
-    if (_lastScrollUs == 0) {
+    if (speedOverride != null) {
+      _scrollVelocity = speedOverride;
+      _lastScrollUs = nowUs;
+    } else if (_lastScrollUs == 0) {
       _lastScrollUs = nowUs;
     } else {
       final dtUs = nowUs - _lastScrollUs;
@@ -679,6 +704,7 @@ class _RawTouchGestureDetectorRegionState
     _mouseScrollIntegral = 0;
     _scrollVelocity = 0;
     _lastScrollUs = 0;
+    _intentPendingScrollDy = 0;
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -706,11 +732,21 @@ class _RawTouchGestureDetectorRegionState
     // horizontal moves pan the canvas. Three fingers are left to the OS.
     if (_useTwoFingerScroll) {
       // The pointer listener locks the intent before any canvas movement.
-      if (_twoFingerMode == 0) return;
-      if (_twoFingerMode == 1) {
-        _addScrollDelta(d.focalPointDelta.dy);
+      if (_twoFingerMode == 0) {
+        _intentPendingScrollDy += d.focalPointDelta.dy;
         return;
       }
+      if (_twoFingerMode == 1) {
+        final pending = _intentPendingScrollDy;
+        _intentPendingScrollDy = 0;
+        final dy = pending + d.focalPointDelta.dy;
+        final dtUs = _nowUs - _intentStartUs;
+        final speed =
+            pending != 0 && dtUs > 0 ? dy / (dtUs / 1000000) : null;
+        _addScrollDelta(dy, speedOverride: speed);
+        return;
+      }
+      _intentPendingScrollDy = 0;
       if (!uuState.active.pinchZoom) return;
     }
 
@@ -754,6 +790,13 @@ class _RawTouchGestureDetectorRegionState
     } else {
       // mobile
       _scale = 1;
+      if (_twoFingerMode == 1 && _intentPendingScrollDy != 0) {
+        final dtUs = _nowUs - _intentStartUs;
+        final speed = dtUs > 0
+            ? _intentPendingScrollDy / (dtUs / 1000000)
+            : null;
+        _addScrollDelta(_intentPendingScrollDy, speedOverride: speed);
+      }
       _cancelTwoFingerIntent();
       if (_twoFingerCanvasChanged) {
         _twoFingerCanvasChanged = false;

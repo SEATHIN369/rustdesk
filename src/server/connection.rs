@@ -5189,7 +5189,14 @@ impl Connection {
     }
 
     async fn turn_on_privacy(&mut self, impl_key: String) {
+        let diag_impl_key = impl_key.clone();
+        log::info!(
+            "[uu-diag] turn_on_privacy request impl_key={impl_key} authed={} privacy_mode_flag={}",
+            self.is_authed_remote_conn(),
+            self.privacy_mode
+        );
         if !self.is_authed_remote_conn() || !self.privacy_mode {
+            log::info!("[uu-diag] privacy ON -> PrvOnFailedDenied impl_key={impl_key}");
             let msg_out = crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOnFailedDenied,
                 impl_key,
@@ -5221,6 +5228,7 @@ impl Connection {
             }
 
             let turn_on_res = privacy_mode::turn_on_privacy(&impl_key, self.inner.id).await;
+            log::info!("[uu-diag] turn_on_privacy impl_key={impl_key} result={turn_on_res:?}");
             match turn_on_res {
                 Some(Ok(res)) => {
                     if res {
@@ -5231,6 +5239,7 @@ impl Connection {
                         );
                         if err_msg.is_empty() {
                             privacy_mode::close_other_remote_connections_for_privacy(self.inner.id);
+                            log::info!("[uu-diag] privacy ON -> PrvOnSucceeded impl_key={impl_key}");
                             crate::common::make_privacy_mode_msg(
                                 back_notification::PrivacyModeState::PrvOnSucceeded,
                                 impl_key,
@@ -5248,6 +5257,7 @@ impl Connection {
                             )
                         }
                     } else {
+                        log::info!("[uu-diag] privacy ON -> PrvOnFailed (res=false) impl_key={impl_key}");
                         crate::common::make_privacy_mode_msg(
                             back_notification::PrivacyModeState::PrvOnFailed,
                             impl_key,
@@ -5275,6 +5285,7 @@ impl Connection {
                 ),
             }
         };
+        log::info!("[uu-diag] privacy ON back_notification sent to peer impl_key={diag_impl_key}");
         self.send(msg_out).await;
     }
 
@@ -5303,6 +5314,7 @@ impl Connection {
         turn_off_res: Option<hbb_common::ResultType<()>>,
         impl_key: String,
     ) -> Message {
+        log::info!("[uu-diag] turn_off_privacy impl_key={impl_key} result={turn_off_res:?}");
         match turn_off_res {
             Some(Ok(_)) => crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOffSucceeded,

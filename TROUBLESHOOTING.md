@@ -363,5 +363,66 @@ cmd 进交互壳即 EOF 退出，bat 根本没跑——任务通知还报 exit 0
 光标恒画 + 选项默认关才是正常态，不要自动强制该选项。③ 灰罩这类「画面被盖住」先做模式差分
 （指针 vs 触控）定位是哪条绘制/服务路径，再对照 git 历史，比纯静态读码更快收敛。
 
+## 手机强制缩放覆盖 Windows 不生效 → 改 Windows 权威（2026-11-22）
+
+**现象**：手机「安全」组选 125%/150% 缩放，开防窥后画面没变大，手机 UI 与实际不符。
+**根因**：主机 `on_privacy_display_ready` 每次防窥 commit 都强制套用手机端存储的缩放档位
+（DisplayConfig -4 set），把用户在 Windows 显示设置里手动改的值覆盖掉；手机档位与 Windows
+实际推荐值/驱动 clamp 不一致时观感「不生效」。两套权威打架。
+**修（用户拍板：Windows 设置权威）**：
+1. 手机 `uu_chrome.dart`：删「显示缩放」ListTile（100/125/150/175 弹窗＋`scale:` 命令）与
+   `_migrateScaleDefault()` 125% 一次性迁移；保留「虚拟屏分辨率」行。
+2. 主机 `host_controls.rs`：`on_privacy_display_ready` 改**只读**——记录设备名＋轮询
+   `dpi_scale::get` 记一条当前缩放日志（`Virtual display … DPI …%; left to Windows Settings`），
+   不再 set；`on_privacy_display_gone` 只清设备名；删 `set_dpi_scale`/`scale:` 命令分支/
+   `State.dpi_scale` 字段/`dpi_scale::set`＋SET 结构常量（保留 get 供日志读回）。
+**效果**：虚拟屏初始缩放回到 Windows 推荐值（1080p 通常 100%），用户在 Windows 显示设置里改；
+Windows 热插拔会恢复手动值，重连后保持。**需重编主机 DLL＋重启服务**（删主机强制是必要的，
+否则下次防窥 commit 又覆盖 Windows 手动值）。
+
+## 「启用按键映射」开关无接线 → 导航二级页＋真总开关（2026-11-22）
+
+**现象**：手机「启用按键映射」开关只翻 map/legacy 键盘模式（`_keyboardMapRow`），不驱动悬浮键；
+切换映射方案被当成开关用。
+**修（用户拍板：导航入口＋整组迁入＋真总开关）**：
+1. `uu_chrome.dart`：删 `_keyboardMapRow`/`_keyboardMapSupported`/`_keyboardMap`/`_loadKeyboardMode`；
+   「外设」组首项改导航行「启用按键映射」→二级页 `_keymapPage`，含 虚拟按键方案（→schemes）/
+   按键放大/点击按键时震动（三项从外设组迁入）；外设组只剩 手势与触摸。抽屉返回改层级
+   `_parentPage`：schemes→keymap→menu、gestures→menu。
+2. **真总开关**：`uu_state.dart` 新增持久化 `keyMapEnabled`（默认 true，load `!=false`、save 写回）；
+   二级页顶部 `SwitchListTile`「启用按键映射」直接翻它；`uu_floating_keys.dart` 渲染门改
+   `if ((scheme.keys.isEmpty || !uuState.keyMapEnabled.value) && !edit) return SizedBox.shrink()`。
+   关掉即隐藏全部悬浮键，切换方案只换键位、不当开关。
+
+## 防窥物理关屏成功但手机按钮状态切不过去 → 链已读通，待复现诊断（2026-11-22）
+
+**现象**：电脑屏幕实际断电（防窥 commit 成功），手机收不到成功消息，按钮状态 20s 后回滚不翻 ON。
+**主机日志取证**（`RustDesk_rCURRENT.log` 00:30 一次防窥，旧 APK）：
+- `00:30:09` 提交成功：禁用多余屏 DISPLAY20/21 → `Virtual display DPI already at 125%`
+  （`on_privacy_display_ready` 跑到 win_virtual_display.rs:639）→ `switch due to privacy mode changed`
+  → capturer privacy id 803。说明 `turn_on_privacy` 返回 `Ok(true)`，主机**应已发 PrvOnSucceeded**。
+- `00:30:26` `Failed to plug out virtual display 0: This only virtual display cannot be plugged out`
+  ＝手机 `_privacyFailTimer`（20s）触发后去插拔虚拟屏 → 证明手机 `PrivacyModeState` 这 20s 一直为空。
+- `00:30:51` 防窥又关。
+**静态链已读通且为上游正确逻辑**：主机 `turn_on_privacy`（connection.rs:5191）虚拟屏 impl 的
+`check_privacy_mode_err` 恒空（privacy_mode.rs:424，只有 WIN_MAG 做真测试）→ 发 `PrvOnSucceeded`；
+官方 .so `handle_back_msg_privacy_mode`（io_loop.rs:2738）→ `update_privacy_mode(impl_key,true)`
+（io_loop.rs:2698 置 `config.privacy_mode.v=true`、存配置、推 `update_privacy_mode` 事件 flutter.rs:706）
+→ Dart `updatePrivacyMode`（model.dart:1811）读 `sessionGetToggleOptionSync('privacy-mode')`
+＝`config.privacy_mode.v`（client.rs:3488）→ 置 `PrivacyModeState.find(peerId).value=implKey`。
+impl_key 两端一致（`privacy_mode_impl_virtual_display`）。`sessionTogglePrivacyMode` 原生只发
+TogglePrivacyMode misc（ui_session_interface.rs:404），**不本地置选项**——选项只在 PrvOnSucceeded 时置。
+**结论**：链本身没错，失败是经验性的（消息是否送达/处理、是否被显示切换打断），不能靠猜下修复。
+**本轮只埋诊断**（随包出，不猜修）：
+- 主机 `connection.rs` `turn_on_privacy` 各分支发送前记 `[uu-diag]`：request impl_key/authed/flag、
+  PrvOnFailedDenied、turn_on_res、PrvOnSucceeded/PrvOnFailed(res=false)、back_notification sent；
+  `turn_off_privacy_result_to_msg` 记 impl_key＋result。
+- Dart `model.dart::updatePrivacyMode` 记 isOn/写入后 state；`uu_chrome.dart` 防窥 worker 记
+  PrivacyModeState 每次变化＋pending、requestPrivacy ON、失败定时器触发。
+**下一步**：用户复现一次物理关屏，拿主机服务日志＋手机 logcat（`[uu-diag]`），据证据定点修
+（若指向显示切换打断/消息丢失，再考虑主机补发或 uu: 反向通道回报防窥态——届时另出计划）。
+**编译坑**：诊断日志在 match 把 `impl_key` 移进消息构造后又借用会 E0382；函数开头
+`let diag_impl_key = impl_key.clone();` 专供末尾日志，避免移动后借用。
+
 产物：APK `4A243C30`（29,290,782 B，152.1s，00:15）；主机 DLL 无改动仍 `E047F868`、
 主机测试包仍 23:35 版 `21CDA2A0`（不重编 DLL、不重启服务）。待真机复测光标无灰罩无重影 + 四修复回归。

@@ -61,8 +61,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   final Set<String> _expanded = {};
   String? _imageQuality;
   bool _imageQualityLoaded = false;
-  bool _keyboardMapSupported = false;
-  bool _keyboardMap = false;
 
   @override
   void initState() {
@@ -77,9 +75,10 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         _poke();
       }
     });
-    _loadKeyboardMode();
     _loadImageQuality();
     _privacyWorker = ever(PrivacyModeState.find(widget.id), (String state) {
+      debugPrint(
+          '[uu-diag] PrivacyModeState changed peer=${widget.id} state="$state" pending=$_privacyPendingOn');
       if (!mounted || _privacyPendingOn == null) return;
       _privacyStartTimer?.cancel();
       _privacyRetryTimer?.cancel();
@@ -87,7 +86,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       if (state.isNotEmpty) _privacyAutoRecovering = false;
       setState(() => _privacyPendingOn = null);
     });
-    _migrateScaleDefault();
     _restorePrivacyIntent();
     _poke();
     WidgetsBinding.instance.addObserver(this);
@@ -110,22 +108,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) _queryHostMute();
-  }
-
-  // 125% is the default for the virtual display: a 1080p/1k stream is
-  // unreadable at 100% on a phone. One-time migration from the old default.
-  void _migrateScaleDefault() {
-    const flag = 'uu-scale-125-migrated';
-    if (bind.mainGetLocalOption(key: flag) == '1') return;
-    bind.mainSetLocalOption(key: flag, value: '1');
-    final stored = _hostSetting('scale', '');
-    if (stored.isEmpty || stored == '100') {
-      _setHostSetting('scale', '125');
-      Future.delayed(const Duration(seconds: 2), () {
-        if (!mounted || !_hostControlSupported) return;
-        _sendHostCmd('scale:125', true);
-      });
-    }
   }
 
   // Physical screen-off is an explicit per-peer choice; the host restores
@@ -181,17 +163,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _peerReadyWorker?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
-  }
-
-  Future<void> _loadKeyboardMode() async {
-    final supported =
-        bind.sessionIsKeyboardModeSupported(sessionId: gFFI.sessionId, mode: 'map');
-    if (!mounted) return;
-    setState(() => _keyboardMapSupported = supported);
-    if (!supported) return;
-    final mode = await bind.sessionGetKeyboardMode(sessionId: gFFI.sessionId);
-    if (!mounted) return;
-    setState(() => _keyboardMap = mode == 'map');
   }
 
   Future<void> _loadImageQuality() async {
@@ -328,6 +299,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty;
     void requestPrivacy() {
       if (!mounted || _privacyPendingOn != true) return;
+      debugPrint(
+          '[uu-diag] requestPrivacy ON impl=$_kPrivacyVdImpl preplug=$preplug hadVD=$hadVirtualDisplay');
       bind.sessionTogglePrivacyMode(
           sessionId: gFFI.sessionId, implKey: _kPrivacyVdImpl, on: true);
     }
@@ -349,6 +322,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _privacyFailTimer = Timer(Duration(seconds: auto ? 8 : 20), () {
       if (!mounted || _privacyPendingOn != true) return;
       if (PrivacyModeState.find(widget.id).value.isEmpty) {
+        debugPrint(
+            '[uu-diag] privacy ON fail-timer fired, state still empty (auto=$auto)');
         if (auto) {
           // A commit rejected at the lock screen may leave the virtual display
           // unplugged; allow the next round to pre-plug again. Keep the intent
@@ -385,7 +360,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     uuState.drawerPage.value = page;
     if (page == 'menu') {
       _loadImageQuality();
-      _loadKeyboardMode();
     }
   }
 
@@ -582,9 +556,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     final width = min(430.0, MediaQuery.of(context).size.width * 0.55);
     final titles = {
       'menu': '操作',
+      'keymap': '按键映射',
       'schemes': '操控方案',
       'gestures': '手势与触摸',
     };
+    final parent = _parentPage(page);
     return Stack(
       children: [
         // Tapping outside the drawer equals Back (one level up).
@@ -595,7 +571,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: () {
-              uuState.drawerPage.value = page == 'menu' ? null : 'menu';
+              uuState.drawerPage.value = parent;
             },
           ),
         ),
@@ -617,7 +593,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
                       color: Colors.white70,
                     ),
                     onPressed: () {
-                      uuState.drawerPage.value = page == 'menu' ? null : 'menu';
+                      uuState.drawerPage.value = parent;
                     },
                   ),
                   Expanded(
@@ -633,9 +609,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
               Expanded(
                 child: page == 'menu'
                     ? _menuPage(context)
-                    : page == 'schemes'
-                        ? _schemesPage(context)
-                        : _gesturesPage(context),
+                    : page == 'keymap'
+                        ? _keymapPage(context)
+                        : page == 'schemes'
+                            ? _schemesPage(context)
+                            : _gesturesPage(context),
               ),
             ],
           ),
@@ -644,6 +622,18 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         ),
       ],
     );
+  }
+
+  // Hierarchical back: schemes sits under keymap, everything else under menu.
+  String? _parentPage(String page) {
+    switch (page) {
+      case 'schemes':
+        return 'keymap';
+      case 'menu':
+        return null;
+      default:
+        return 'menu';
+    }
   }
 
   bool _optionOn(String option) =>
@@ -895,23 +885,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     );
   }
 
-  Widget _keyboardMapRow() {
-    return SwitchListTile(
-      dense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-      secondary: const Icon(Icons.keyboard_alt_outlined,
-          color: Colors.white70, size: 20),
-      title: const Text('启用按键映射',
-          style: TextStyle(color: Colors.white, fontSize: 13)),
-      value: _keyboardMap,
-      onChanged: (v) async {
-        await bind.sessionSetKeyboardMode(
-            sessionId: gFFI.sessionId, value: v ? 'map' : 'legacy');
-        if (mounted) setState(() => _keyboardMap = v);
-      },
-    );
-  }
-
   List<Widget> _displayRows() {
     final pi = gFFI.ffiModel.pi;
     final rows = <Widget>[
@@ -1010,43 +983,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         ListTile(
           dense: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          title: const Text('显示缩放',
-              style: TextStyle(color: Colors.white, fontSize: 13)),
-          subtitle: Text(
-              '当前 ${_hostSetting('scale', '125')}% · 开启关屏后生效，关屏期间调整立即应用',
-              style: const TextStyle(color: Colors.white38, fontSize: 11)),
-          trailing:
-              const Icon(Icons.chevron_right, color: Colors.white54, size: 18),
-          onTap: () async {
-            const modes = {
-              '100': '100%',
-              '125': '125%',
-              '150': '150%',
-              '175': '175%',
-            };
-            final scale = _hostSetting('scale', '125');
-            final picked = await showDialog<String>(
-              context: context,
-              builder: (ctx) => SimpleDialog(
-                title: const Text('显示缩放（虚拟屏）'),
-                children: modes.entries
-                    .map((e) => SimpleDialogOption(
-                          onPressed: () => Navigator.of(ctx).pop(e.key),
-                          child: Text(
-                              '${e.value}${e.key == scale ? '  ✓' : ''}'),
-                        ))
-                    .toList(),
-              ),
-            );
-            if (picked == null || !mounted) return;
-            setState(() => _setHostSetting('scale', picked));
-            _sendHostCmd('scale:$picked', true);
-          },
-        ),
-      if (hostControl)
-        ListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: const Text('虚拟屏分辨率',
               style: TextStyle(color: Colors.white, fontSize: 13)),
           subtitle: Text('当前 $displayMode · 下次开启关屏时生效',
@@ -1088,21 +1024,55 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   }
 
   List<Widget> _peripheralRows() {
-    final scheme = uuState.active;
     return [
-      _navRow(Icons.gamepad_outlined, '虚拟按键方案', () {
-        uuState.drawerPage.value = 'schemes';
-      }),
-      _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
-        scheme.keyScale = v;
-      }),
-      _toggleRow('点击按键时震动', scheme.haptics, (v) {
-        scheme.haptics = v;
+      _navRow(Icons.keyboard_alt_outlined, '启用按键映射', () {
+        uuState.drawerPage.value = 'keymap';
       }),
       _navRow(Icons.touch_app_outlined, '手势与触摸', () {
         uuState.drawerPage.value = 'gestures';
       }),
     ];
+  }
+
+  Widget _keymapPage(BuildContext context) {
+    final scheme = uuState.active;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      children: [
+        _card(Obx(() => SwitchListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              secondary: const Icon(Icons.keyboard_alt_outlined,
+                  color: Colors.white70, size: 20),
+              title: const Text('启用按键映射',
+                  style: TextStyle(color: Colors.white, fontSize: 13)),
+              subtitle: Text(
+                  uuState.keyMapEnabled.value
+                      ? '悬浮键已启用，点击即发送到电脑'
+                      : '已关闭，悬浮键隐藏（方案配置保留）',
+                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              value: uuState.keyMapEnabled.value,
+              onChanged: (v) {
+                uuState.keyMapEnabled.value = v;
+                uuState.save();
+              },
+            ))),
+        const SizedBox(height: 12),
+        _card(Column(
+          children: [
+            _navRow(Icons.gamepad_outlined, '虚拟按键方案', () {
+              uuState.drawerPage.value = 'schemes';
+            }),
+            _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
+              scheme.keyScale = v;
+            }),
+            _toggleRow('点击按键时震动', scheme.haptics, (v) {
+              scheme.haptics = v;
+            }),
+          ],
+        )),
+      ],
+    );
   }
 
   List<Widget> _moreRows(BuildContext context) {
@@ -1120,7 +1090,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 
   Widget _menuPage(BuildContext context) {
     final operationRows = <Widget>[
-      if (_keyboardMapSupported) _keyboardMapRow(),
       if (!gFFI.ffiModel.isPeerAndroid) _touchPointerRow(),
     ];
     return ListView(

@@ -30,9 +30,6 @@ pub struct State {
     pub display_width: u32,
     #[serde(default = "default_height")]
     pub display_height: u32,
-    /// True DPI scaling of the virtual display, in percent (100/125/150/175).
-    #[serde(default = "default_scale")]
-    pub dpi_scale: u32,
 }
 
 fn default_width() -> u32 {
@@ -41,10 +38,6 @@ fn default_width() -> u32 {
 
 fn default_height() -> u32 {
     1080
-}
-
-fn default_scale() -> u32 {
-    125
 }
 
 impl Default for State {
@@ -56,7 +49,6 @@ impl Default for State {
             prev_mute: None,
             display_width: default_width(),
             display_height: default_height(),
-            dpi_scale: default_scale(),
         }
     }
 }
@@ -154,7 +146,7 @@ pub fn system_is_muted() -> Option<bool> {
 #[cfg(windows)]
 mod dpi_scale {
     use windows::Win32::Devices::Display::{
-        DisplayConfigGetDeviceInfo, DisplayConfigSetDeviceInfo, GetDisplayConfigBufferSizes,
+        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
         QueryDisplayConfig, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
         DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_DEVICE_INFO_TYPE, DISPLAYCONFIG_MODE_INFO,
         DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TOPOLOGY_ID,
@@ -165,8 +157,6 @@ mod dpi_scale {
     const DPI_VALUES: [u32; 12] = [100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500];
     const GET_SOURCE_DPI_SCALE: DISPLAYCONFIG_DEVICE_INFO_TYPE =
         DISPLAYCONFIG_DEVICE_INFO_TYPE(-3);
-    const SET_SOURCE_DPI_SCALE: DISPLAYCONFIG_DEVICE_INFO_TYPE =
-        DISPLAYCONFIG_DEVICE_INFO_TYPE(-4);
 
     #[repr(C)]
     struct SourceDpiScaleGet {
@@ -174,12 +164,6 @@ mod dpi_scale {
         min_scale_rel: i32,
         cur_scale_rel: i32,
         max_scale_rel: i32,
-    }
-
-    #[repr(C)]
-    struct SourceDpiScaleSet {
-        header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
-        scale_rel: i32,
     }
 
     fn header(
@@ -280,41 +264,12 @@ mod dpi_scale {
         let cur = rec + info.cur_scale_rel;
         Some((*DPI_VALUES.get(cur as usize)?, DPI_VALUES[rec as usize]))
     }
-
-    pub fn set(device: &str, percent: u32) -> Result<(), String> {
-        let (adapter, id) =
-            find_source(device).ok_or_else(|| format!("{device} is not an active display"))?;
-        let info = get_source_scale(adapter, id).ok_or("DPI scale query failed")?;
-        let rec = recommended_index(info.min_scale_rel).ok_or("unexpected recommended scale")?;
-        let target = DPI_VALUES
-            .iter()
-            .position(|&p| p == percent)
-            .ok_or_else(|| format!("unsupported scale {percent}%"))? as i32;
-        let rel = (target - rec).clamp(info.min_scale_rel, info.max_scale_rel);
-        let set = SourceDpiScaleSet {
-            header: header(
-                SET_SOURCE_DPI_SCALE,
-                std::mem::size_of::<SourceDpiScaleSet>(),
-                adapter,
-                id,
-            ),
-            scale_rel: rel,
-        };
-        match unsafe { DisplayConfigSetDeviceInfo(&set.header) } {
-            0 => Ok(()),
-            rc => Err(format!("DisplayConfigSetDeviceInfo failed, rc={rc}")),
-        }
-    }
 }
 
 #[cfg(not(windows))]
 mod dpi_scale {
     pub fn get(_device: &str) -> Option<(u32, u32)> {
         None
-    }
-
-    pub fn set(_device: &str, _percent: u32) -> Result<(), String> {
-        Err("unsupported platform".into())
     }
 }
 
@@ -323,13 +278,12 @@ lazy_static::lazy_static! {
     static ref PRIVACY_DISPLAY: Mutex<Option<String>> = Mutex::new(None);
 }
 
-/// Called once privacy mode committed its display layout. The phone's stored
-/// scale is authoritative: Windows restores a manual Settings scale on hotplug,
-/// which must not override the user's intent, so it is always applied here.
+/// Called once privacy mode committed its display layout. Scaling is left to
+/// Windows Settings (the user adjusts it there during the session); we only
+/// record the device and log the current scale for diagnostics.
 pub fn on_privacy_display_ready(device: &str) {
     let device = device.trim_end_matches('\0');
     *PRIVACY_DISPLAY.lock().unwrap() = Some(device.to_owned());
-    let stored = STATE.lock().unwrap().dpi_scale;
     let mut info = None;
     for _ in 0..10 {
         if let Some(v) = dpi_scale::get(device) {
@@ -338,56 +292,16 @@ pub fn on_privacy_display_ready(device: &str) {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    let Some((cur, recommended)) = info else {
-        hbb_common::log::warn!("Virtual display {device} not found; DPI scale not applied");
-        return;
-    };
-    if stored == cur {
-        hbb_common::log::info!("Virtual display DPI already at {cur}%");
-        return;
-    }
-    if let Err(e) = dpi_scale::set(device, stored) {
-        hbb_common::log::error!("Failed to set virtual display DPI {stored}%: {e}");
-        return;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    match dpi_scale::get(device) {
-        Some((actual, _)) if actual == stored => {
-            hbb_common::log::info!("Virtual display DPI set to {stored}% (was {cur}%)");
-        }
-        Some((actual, _)) => hbb_common::log::warn!(
-            "Virtual display DPI clamped to {actual}% (requested {stored}%, recommended {recommended}%)"
+    match info {
+        Some((cur, recommended)) => hbb_common::log::info!(
+            "Virtual display {device} ready, DPI {cur}% (recommended {recommended}%); left to Windows Settings"
         ),
-        None => hbb_common::log::warn!("Virtual display DPI readback failed after setting {stored}%"),
+        None => hbb_common::log::warn!("Virtual display {device} not found; DPI scale not queried"),
     }
 }
 
 pub fn on_privacy_display_gone() {
-    // Keep whatever scale the user picked in Windows Settings while the
-    // virtual display was up; the next session starts from it.
-    let device = PRIVACY_DISPLAY.lock().unwrap().clone();
-    if let Some(device) = device.as_deref() {
-        if let Some((cur, _)) = dpi_scale::get(device) {
-            with_state(|s| s.dpi_scale = cur);
-        }
-    }
     *PRIVACY_DISPLAY.lock().unwrap() = None;
-}
-
-pub fn set_dpi_scale(scale: u32) {
-    let scale = match scale {
-        100 | 125 | 150 | 175 | 200 => scale,
-        _ => 100,
-    };
-    with_state(|s| s.dpi_scale = scale);
-    hbb_common::log::info!("Host DPI scale set to {scale}");
-    let device = PRIVACY_DISPLAY.lock().unwrap().clone();
-    if let Some(device) = device {
-        match dpi_scale::set(&device, scale) {
-            Ok(()) => hbb_common::log::info!("Virtual display DPI applied live: {scale}%"),
-            Err(e) => hbb_common::log::warn!("Failed to apply DPI {scale}% live: {e}"),
-        }
-    }
 }
 
 /// Applies the persisted mute state when the host server starts.
@@ -476,12 +390,6 @@ pub fn handle_command(key: &str, on: bool) -> bool {
                         });
                         return true;
                     }
-                }
-            }
-            if let Some(scale) = key.strip_prefix("scale:") {
-                if let Ok(scale) = scale.parse::<u32>() {
-                    set_dpi_scale(scale);
-                    return true;
                 }
             }
             false

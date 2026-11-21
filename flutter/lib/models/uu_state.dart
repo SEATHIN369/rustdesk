@@ -171,6 +171,10 @@ class UuState {
   // Bumped when the host reports state over the reverse chat channel so the
   // chrome (which reads persisted intents non-reactively) rebuilds.
   final hostStateVersion = 0.obs;
+  // Master switch for the floating virtual keys (按键映射). When off the keys
+  // overlay is hidden; scheme selection only changes which keys are configured,
+  // it does not enable/disable mapping.
+  final keyMapEnabled = true.obs;
 
   // Thin reverse-channel hook: the official client .so forwards host chat
   // messages here. Only "uu:" payloads are consumed; normal chat is unaffected.
@@ -210,6 +214,7 @@ class UuState {
           railX = (decoded['railX'] as num?)?.toDouble() ?? 0.97;
           railY = (decoded['railY'] as num?)?.toDouble() ?? 0.5;
           keyboardTab.value = (decoded['tab'] as num?)?.toInt() ?? 2;
+          keyMapEnabled.value = decoded['keyMapEnabled'] != false;
         }
       }
     } catch (_) {}
@@ -228,6 +233,7 @@ class UuState {
         'railX': railX,
         'railY': railY,
         'tab': keyboardTab.value,
+        'keyMapEnabled': keyMapEnabled.value,
       }),
     );
   }

@@ -468,7 +468,9 @@ class _UuFloatingKeysOverlayState extends State<UuFloatingKeysOverlay> {
       final scheme = uuState.active;
       final edit = uuState.editLayout.value;
       final screen = MediaQuery.of(context).size;
-      if (scheme.keys.isEmpty && !edit) return const SizedBox.shrink();
+      if ((scheme.keys.isEmpty || !uuState.keyMapEnabled.value) && !edit) {
+        return const SizedBox.shrink();
+      }
       return Stack(
         children: [
           for (final key in scheme.keys) _keyWidget(key, scheme, edit, screen),

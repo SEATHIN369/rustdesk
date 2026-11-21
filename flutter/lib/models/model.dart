@@ -1824,8 +1824,10 @@ class FfiModel with ChangeNotifier {
       } else {
         PrivacyModeState.find(peerId).value = '';
       }
+      debugPrint(
+          '[uu-diag] updatePrivacyMode peer=$peerId isOn=$isOn state=${PrivacyModeState.find(peerId).value}');
     } catch (e) {
-      //
+      debugPrint('[uu-diag] updatePrivacyMode error: $e');
     }
   }
 

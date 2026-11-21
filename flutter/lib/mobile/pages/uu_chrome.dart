@@ -33,6 +33,9 @@ class _UuChromeState extends State<UuChrome> {
   Timer? _hideTimer;
   Timer? _fadeTimer;
   Timer? _privacyRetryTimer;
+  Timer? _privacyFailTimer;
+  bool? _privacyPendingOn;
+  Worker? _privacyWorker;
   Worker? _railWorker;
   bool _faded = false;
 
@@ -49,6 +52,12 @@ class _UuChromeState extends State<UuChrome> {
         _poke();
       }
     });
+    _privacyWorker = ever(PrivacyModeState.find(widget.id), (String _) {
+      if (!mounted || _privacyPendingOn == null) return;
+      _privacyRetryTimer?.cancel();
+      _privacyFailTimer?.cancel();
+      setState(() => _privacyPendingOn = null);
+    });
     _poke();
   }
 
@@ -57,6 +66,8 @@ class _UuChromeState extends State<UuChrome> {
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
     _privacyRetryTimer?.cancel();
+    _privacyFailTimer?.cancel();
+    _privacyWorker?.dispose();
     _railWorker?.dispose();
     super.dispose();
   }
@@ -564,18 +575,34 @@ class _UuChromeState extends State<UuChrome> {
           final supported = impls != null &&
               impls.any((e) => (e as List)[0] == vdImpl);
           final on = state.value.isNotEmpty;
+          final pending = _privacyPendingOn;
+          final subtitle = pending != null
+              ? Row(children: [
+                  const SizedBox(
+                    width: 10,
+                    height: 10,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white70),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(pending ? '正在开启…' : '正在关闭…',
+                      style: const TextStyle(
+                          color: Colors.white54, fontSize: 11)),
+                ])
+              : supported
+                  ? const Text('断开物理显示器，画面切到虚拟屏',
+                      style: TextStyle(color: Colors.white38, fontSize: 11))
+                  : const Text('需被控端安装并以服务运行官方 RustDesk',
+                      style: TextStyle(color: Colors.white38, fontSize: 11));
           return SwitchListTile(
             dense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 16),
             title: const Text('操控时物理关屏（虚拟屏防窥）',
                 style: TextStyle(color: Colors.white, fontSize: 13)),
-            subtitle: supported
-                ? const Text('断开物理显示器，画面切到虚拟屏',
-                    style: TextStyle(color: Colors.white38, fontSize: 11))
-                : const Text('需被控端安装并以服务运行官方 RustDesk',
-                    style: TextStyle(color: Colors.white38, fontSize: 11)),
-            value: on,
+            subtitle: subtitle,
+            value: pending ?? on,
             onChanged: (v) {
+              if (pending != null) return;
               if (!supported) {
                 showToast('被控端不支持虚拟屏防窥（需安装版+服务运行）');
                 return;
@@ -584,18 +611,33 @@ class _UuChromeState extends State<UuChrome> {
                 showToast('被控端未授权防窥模式');
                 return;
               }
+              setState(() => _privacyPendingOn = !on);
               bind.sessionTogglePrivacyMode(
                   sessionId: sessionId, implKey: vdImpl, on: !on);
               _privacyRetryTimer?.cancel();
+              _privacyFailTimer?.cancel();
               if (!on) {
                 // First turn-on can race the Idd driver install ("No virtual
                 // displays"); by the retry the device has usually appeared.
                 _privacyRetryTimer = Timer(const Duration(seconds: 4), () {
-                  if (!mounted) return;
+                  if (!mounted || _privacyPendingOn != true) return;
                   if (PrivacyModeState.find(widget.id).value.isEmpty) {
                     bind.sessionTogglePrivacyMode(
                         sessionId: sessionId, implKey: vdImpl, on: true);
                   }
+                });
+                _privacyFailTimer = Timer(const Duration(seconds: 10), () {
+                  if (!mounted || _privacyPendingOn != true) return;
+                  if (PrivacyModeState.find(widget.id).value.isEmpty) {
+                    setState(() => _privacyPendingOn = null);
+                    showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
+                  }
+                });
+              } else {
+                _privacyFailTimer = Timer(const Duration(seconds: 6), () {
+                  if (!mounted || _privacyPendingOn != false) return;
+                  setState(() => _privacyPendingOn = null);
+                  showToast('关闭防窥未响应，请稍后重试');
                 });
               }
             },

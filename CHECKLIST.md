@@ -119,11 +119,11 @@
 
 | 项              | 值                                                                                                                                                                             |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 分支 / 最新提交 | `local/1.5.3-android`（本轮提交含 DPI 真接口、锁屏输入桌面修复，已推 fork）                                                                                                  |
+| 分支 / 最新提交 | `local/1.5.3-android` @ `bd73e9ce0`（已推 fork）                                                                                                                             |
 | 主机安装目录    | `D:\soft\apps\RustDesk`，官方备份 `librustdesk.dll.official-1.5.3.bak`，上一版自编译 `librustdesk.dll.selfbuild-prev.bak`                                                      |
 | 当前主机 DLL    | 36,236,800 B，SHA256`6DA63C9C…6F11`（部署于 2026-11-21 17:09，服务已重启，新 `--server` 在会话 1）                                                                            |
 | APK             | `D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-1712.apk`（29,282,884 B，SHA256 `F7FFEBA1…23AA`，17:12；10 分钟内以 flutter-apk/app-release.apk 为准）            |
-| 协作者包        | `D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`（本轮重打，含 8 文件全量 `host-src.patch`，已用 `git apply --check` 验证可打在 tag 1.5.3 上）          |
+| 协作者包        | `D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`（14,621,606 B，17:14；含 8 文件全量 `host-src.patch`，已用 `git apply --check` 验证可打在 tag 1.5.3 上）  |
 | 构建脚本        | `C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat` / `build_apk.bat`                                                                                               |
 
 ## 4. 已知问题 / 风险

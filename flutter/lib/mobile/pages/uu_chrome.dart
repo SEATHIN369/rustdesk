@@ -32,6 +32,7 @@ class UuChrome extends StatefulWidget {
 class _UuChromeState extends State<UuChrome> {
   Timer? _hideTimer;
   Timer? _fadeTimer;
+  Timer? _privacyStartTimer;
   Timer? _privacyRetryTimer;
   Timer? _privacyFailTimer;
   bool? _privacyPendingOn;
@@ -54,6 +55,7 @@ class _UuChromeState extends State<UuChrome> {
     });
     _privacyWorker = ever(PrivacyModeState.find(widget.id), (String _) {
       if (!mounted || _privacyPendingOn == null) return;
+      _privacyStartTimer?.cancel();
       _privacyRetryTimer?.cancel();
       _privacyFailTimer?.cancel();
       setState(() => _privacyPendingOn = null);
@@ -65,6 +67,7 @@ class _UuChromeState extends State<UuChrome> {
   void dispose() {
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
+    _privacyStartTimer?.cancel();
     _privacyRetryTimer?.cancel();
     _privacyFailTimer?.cancel();
     _privacyWorker?.dispose();
@@ -513,12 +516,17 @@ class _UuChromeState extends State<UuChrome> {
     );
   }
 
-  Widget _toggleRow(String label, bool value, ValueChanged<bool> onChanged) {
+  Widget _toggleRow(String label, bool value, ValueChanged<bool> onChanged,
+      {String? subtitle}) {
     return SwitchListTile(
       dense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       title: Text(label,
           style: const TextStyle(color: Colors.white, fontSize: 13)),
+      subtitle: subtitle == null
+          ? null
+          : Text(subtitle,
+              style: const TextStyle(color: Colors.white38, fontSize: 11)),
       value: value,
       onChanged: (v) {
         setState(() => onChanged(v));
@@ -559,9 +567,9 @@ class _UuChromeState extends State<UuChrome> {
           child: Text('被控端',
               style: TextStyle(color: Colors.white54, fontSize: 11)),
         ),
-        _toggleRow('被控端静音运行', optionOn('disable-audio'), (v) {
+        _toggleRow('电脑声音不传到手机', optionOn('disable-audio'), (v) {
           toggleOption('disable-audio');
-        }),
+        }, subtitle: '只断开串流音频，电脑扬声器照常发声'),
         _toggleRow('退出远控时锁定电脑', optionOn('lock-after-session-end'), (v) {
           toggleOption('lock-after-session-end');
         }),
@@ -612,23 +620,43 @@ class _UuChromeState extends State<UuChrome> {
                 return;
               }
               setState(() => _privacyPendingOn = !on);
-              bind.sessionTogglePrivacyMode(
-                  sessionId: sessionId, implKey: vdImpl, on: !on);
+              _privacyStartTimer?.cancel();
               _privacyRetryTimer?.cancel();
               _privacyFailTimer?.cancel();
               if (!on) {
-                // First turn-on can race the Idd driver install ("No virtual
-                // displays"); by the retry the device has usually appeared.
-                _privacyRetryTimer = Timer(const Duration(seconds: 4), () {
+                // turn_on only waits 5s for the virtual display to appear, but
+                // Amyuni's monitor needs ~6s to reach ACTIVE. Plug it first so
+                // the server-side check finds it instead of racing.
+                final preplug = gFFI.ffiModel.pi.isAmyuniIdd;
+                final hadVirtualDisplay =
+                    gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty;
+                void requestPrivacy() {
+                  if (!mounted || _privacyPendingOn != true) return;
+                  bind.sessionTogglePrivacyMode(
+                      sessionId: sessionId, implKey: vdImpl, on: true);
+                }
+
+                if (preplug) {
+                  bind.sessionToggleVirtualDisplay(
+                      sessionId: sessionId, index: 0, on: true);
+                  _privacyStartTimer =
+                      Timer(const Duration(seconds: 4), requestPrivacy);
+                } else {
+                  requestPrivacy();
+                }
+                _privacyRetryTimer = Timer(const Duration(seconds: 12), () {
                   if (!mounted || _privacyPendingOn != true) return;
                   if (PrivacyModeState.find(widget.id).value.isEmpty) {
-                    bind.sessionTogglePrivacyMode(
-                        sessionId: sessionId, implKey: vdImpl, on: true);
+                    requestPrivacy();
                   }
                 });
-                _privacyFailTimer = Timer(const Duration(seconds: 10), () {
+                _privacyFailTimer = Timer(const Duration(seconds: 20), () {
                   if (!mounted || _privacyPendingOn != true) return;
                   if (PrivacyModeState.find(widget.id).value.isEmpty) {
+                    if (preplug && !hadVirtualDisplay) {
+                      bind.sessionToggleVirtualDisplay(
+                          sessionId: sessionId, index: 0, on: false);
+                    }
                     setState(() => _privacyPendingOn = null);
                     showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
                   }

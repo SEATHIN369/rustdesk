@@ -193,7 +193,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _accelSub = accelerometerEventStream().listen((e) {
       if (e.x.abs() < 6 || e.y.abs() > 6) return;
       final target =
-          e.x < 0 ? DeviceOrientation.landscapeLeft : DeviceOrientation.landscapeRight;
+          e.x > 0 ? DeviceOrientation.landscapeLeft : DeviceOrientation.landscapeRight;
       if (target == _appliedLandscape) {
         _flipTimer?.cancel();
         _flipTarget = null;
@@ -556,11 +556,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (pwd.isEmpty) return;
     Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
-      final input = gFFI.inputModel;
-      for (final ch in pwd.split('')) {
-        input.inputKey(ch);
-      }
-      input.inputKey('VK_RETURN');
+      // Per-char inputKey goes through the legacy Chr path; the lock screen
+      // only reliably accepts the sequence path used by manual IME typing.
+      bind.sessionInputString(sessionId: gFFI.sessionId, value: pwd);
+      Timer(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
+        gFFI.inputModel.inputKey('VK_RETURN');
+      });
     });
   }
 

@@ -3,27 +3,28 @@
 约定：你直接加行、改期望、在结果里写现象；我回填状态与证据。不要写密码 / Peer ID / 公网 IP。
 状态：⬜ 待测 ｜ 🔄 进行中 ｜ ✅ 通过 ｜ ❌ 失败 ｜ ⏸ 阻塞 ｜ 🗑 废弃
 
-最近更新：2026-11-21 21:58
+最近更新：2026-11-21 22:28
 
 ## 工件与环境
 
-- 分支：`local/1.5.3-android` @ `490994e6d`，已推 fork（github.com/kitsuneMori96/rustdesk）
-- 主机 DLL：36,243,968 B，SHA256 `F3B1859C…103E`，已部署到 `D:\soft\apps\RustDesk`（21:40 起服务运行，`--server` 在会话 0）
-- 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-2148.apk`，29,287,646 B，SHA256 `714F62E9…0F3E`
+- 分支：`local/1.5.3-android` @ `f9adc7a38`，已推 fork（github.com/kitsuneMori96/rustdesk）
+- 主机 DLL：36,244,992 B，SHA256 `45AEC95B…5A57`，已部署到 `D:\soft\apps\RustDesk`（22:24 起服务运行，含 ANSI 锁屏判定 + 唤醒键）
+- 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-2220.apk`，29,287,614 B，SHA256 `D84BAA57…CE39`（含解锁后防窥自动重试）
 - 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,253 B（18:07 打包）；补丁 8 个文件，已验证能打在 tag 1.5.3 上
-- 分发测试包（Windows 便携应用）：`D:\Download\共享文件夹\rustdesk-uu-host-win64-test-2026-11-21-2148.zip`，33,444,590 B，SHA256 `4973FF98…6B89`（21:48 打包：官方 1.5.3+71 exe + 自编译 DLL + 插件/驱动/虚拟屏，不含配置与备份 DLL，附 README-TEST.txt；18:59 的旧包已过时）
+- 分发测试包（Windows 便携应用）：`D:\Download\共享文件夹\rustdesk-uu-host-win64-test-2026-11-21-2226.zip`，33,445,740 B，SHA256 `EF0AC652…1306`（22:26 打包，含上述最终 DLL；22:20 / 21:48 / 18:59 的旧包已过时并删除 22:20 那个）
 - 构建脚本：`C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat`（主机）/ `build_apk.bat`（APK）
 - 主机安装目录：官方备份 `librustdesk.dll.official-1.5.3.bak`，上一版自编译 `librustdesk.dll.selfbuild-prev.bak`
 
 ## 本轮待真机（重点）
 
-- T12 键盘面板 + IME 点画布外
-- T17 第五格「画质」
-- T18 官方白色鼠标按键应消失
-- T25 / T28 防窥不再弹「进入/退出」提示
-- T26 / T27 防窥时 Windows 设置里只应有 1 个屏，缩放显示 125%（或你选的值）
-- 若仍有多屏：把日志里 `Privacy mode disabled extra display …` 行发我
-- T29–T43 自动解锁闭环：先更新两个主机包 / APK；连接锁屏电脑验证「锁屏才注入、失败自动重试、未锁屏不注入」
+- 先装 22:26 主机包 + 22:20 APK（两边都要更新，只换一边测不出来）
+- T29 / T42 锁屏 + 正确密码：主机日志应出现 `Auto unlock: lock screen detected`，随后解锁成功；连测 10 次
+- T40 未锁屏：日志 `skipped, state 0 desktop "Default"`（不再是 not at the lock screen 那句模糊文案）
+- T41 错误密码：重试 3 次后放弃，锁屏界面没被乱七八糟字符污染
+- T44 解锁页「立即尝试解锁」：锁屏时才出现的按钮能手动触发
+- T45 锁屏中开防窥：预期失败（Windows 锁屏拒绝改显示模式），解锁后自动恢复开启，全程不弹提示
+- T12 键盘面板 + IME 点画布外 / T17 第五格「画质」 / T18 官方白色鼠标按键应消失
+- T25 / T26 / T27 / T28 防窥单屏 + 缩放 125%（或你选的值）
 
 ## 1. 产品目标
 
@@ -88,15 +89,16 @@
 - T26 缩放选 125% 后开防窥：分辨率不变、界面变大 → 🔄 待真机（用户：仍 100%，手机 UI 与实际不符）。已改两轮：①DisplayConfig -3/-4；②修复虚拟屏名字带 NUL 导致查不到（此前自动应用从未生效，日志连续 `not found`），现设备名截断后再匹配。另：防窥 commit 会激活其他驱动残留的「已挂载无模式」虚拟屏（本机 UU/GameViewer 有 9 个），commit 后会把多余活动屏禁用，日志 `Privacy mode disabled extra display …`
 - T27 分辨率 1536x864 + 缩放 125%：两者独立生效 → ⬜ 待真机
 - T28 防窥开关全过程：立即转圈、4s 预插、失败回滚 → 🔄 待真机（用户：同上）。重试与去提示见 T25
-- T29 自动解锁（密码 = 单个空格）：锁屏后自动输密码 + 回车成功 → 🔄 待真机（前两轮：仍报密码错误）。本轮改为闭环：手机发 `uu:unlock:<base64>`，被控端自己判断锁屏（输入桌面 = Winlogon 且有 LogonUI 窗口，避开 UAC）、切桌面、注入后轮询是否离开锁屏，最多 3 次（每次先退格清空）。日志 `Auto unlock: attempt …` / `Auto unlock: success …`
+- T29 自动解锁（密码 = 单个空格）：锁屏后自动输密码 + 回车成功 → 🔄 待真机（22:07 真机：主机收到命令但判为非锁屏）。根因：`GetUserObjectInformation` 在本编译单元是 **A 版**，返回 ANSI，上一版却用 `WCHAR[] + _wcsicmp` 比较，桌面名永远对不上「Winlogon」。已修：改回 ANSI 比较；判定细分 0/1/2/-1 并记日志；收到命令后最多轮询 12s 等锁屏出现。日志 `Auto unlock: lock screen detected` / `skipped, state … desktop …`
 - T30 全角空格密码：保存时黄字警告 → ⬜
 - T31 方案重命名 / 新建：能唤 IME 并改名 → ✅
 - T32 勾「退出远控时锁定电脑」后断开：主机会话锁定 → ✅
-- T40 未锁屏时连接：主机跳过注入（日志 `skipped, not at the lock screen`），鼠标键盘正常 → ⬜
+- T40 未锁屏时连接：主机跳过注入（日志 `skipped, state 0 desktop "Default"`），鼠标键盘正常 → ⬜
 - T41 错误密码：主机重试 3 次后放弃，锁屏不被搞乱，手机可手动输入 → ⬜
 - T42 锁屏 + 正确密码连测 10 次：每次都能解锁 → ⬜
 - T43 旧版主机（18:59 包）配新版 APK：能力位缺失，自动退回旧的一次性输入方式 → ⬜
 - T44 解锁页「立即尝试解锁」按钮：连上后锁屏才出现时手动触发 → ⬜
+- T45 锁屏中开防窥：预期开不起来（Windows 锁屏拒绝改显示模式），解锁后自动恢复为开启，期间不弹提示、不重复弹「虚拟屏插入失败」→ ⬜
 
 ### 2.6 回滚 / 异常
 
@@ -119,6 +121,7 @@
 - 手动输密码后偶发卡锁屏帧（旧问题，未稳定复现）。
 - 自动解锁注入的是账户密码：若电脑只配了 PIN / Windows Hello 且锁屏默认 PIN 框，输入会进 PIN 框而失败；需在锁屏切到「密码」登录。
 - 自动解锁的锁屏识别与注入只在服务模式（SYSTEM 会话）下可靠；便携用户模式受 UIPI 限制。
+- 锁屏期间 Windows 拒绝改显示模式，防窥开启必然失败（日志 `Privacy mode display commit attempt … failed`）；手机端现在会在解锁后自动重试开启防窥，最长约 40s。
 
 ## 4. 已拍板
 
@@ -137,3 +140,5 @@
 - 18:06 真机复测反馈（缩放生效但出现一堆虚拟屏）：定位到虚拟屏名字尾随 NUL 导致 DisplayConfig 匹配失败（自动缩放从未生效），并确认本机另有 UU/GameViewer IDD 残留 9 个已挂载幽灵屏；commit 后新增多余活动屏禁用逻辑，分辨率下发改用正确设备名。DLL `ABC99FC7` 已部署。
 - 19:02 按用户要求打分发用 Windows 测试包（便携 zip，32.5 MB），README-TEST.txt 内含 DLL 校验、运行方式与反馈要求。
 - 21:58 自动解锁升级（P0–P3）：把判断权挪到被控端——新增 `uu:unlock:<base64>` 命令（复用防窥通道，`uu_auto_unlock` 能力位区分新旧主机）；主机侧识别真锁屏（Winlogon 桌面 + LogonUI 进程，避开 UAC）、切输入桌面、SendInput 注入、轮询验证、最多 3 次重试并退格清场，全程不落明文密码；旧 Seq 注入补 `Seq input` 特征日志。手机侧密码改 Android Keystore AES-GCM 存本机（旧明文自动迁移）、解锁页新增手动触发。DLL `F3B1859C`、APK `714F62E9`，主机测试包 33.4 MB 重打。
+- 22:16 真机复测（22:07 那次「主机没行动」）：根因是锁屏判定误报——`GetUserObjectInformation` 在本编译单元是 A 版（ANSI），被写成 WCHAR 比较后桌面名永不匹配。改回 ANSI 比较、判定细分 0/1/2/-1 并记桌面名日志、收到命令后 12s 轮询等锁屏。同一时刻的防窥 commit 失败是锁屏期间系统拒绝改显示模式所致（非 NUL 回归），客户端改为解锁后按意图自动重试（auto 模式不弹提示、不重复预插虚拟屏）。DLL `18FB5AD4` 部署，APK `D84BAA57` 出包。
+- 22:24 追加修复：LogonUI 会吞掉锁屏的第一击，注入前先 tap 一次 VK_SHIFT 唤醒。最终 DLL `45AEC95B`（36,244,992 B）已部署、主机测试包重打为 22:26 版 `EF0AC652`；22:20 的中间包已删。

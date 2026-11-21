@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -59,6 +60,20 @@ bool isSpecialHoldDragActive = false;
 // Cache the last focal point to calculate deltas in special hold-drag mode.
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 
+const double _kTwoFingerIntentScrollAngleDeg = 30;
+const double _kTwoFingerIntentMinSamplePx = 8;
+const int _kTwoFingerIntentMinSamples = 6;
+const int _kTwoFingerIntentWarmupUs = 48 * 1000;
+const int _kTwoFingerIntentWindowUs = 100 * 1000;
+const int _kTwoFingerIntentMaxWindowUs = 160 * 1000;
+const int _kTwoFingerIntentSampleGapUs = 8 * 1000;
+const double _kScrollSlowSpeed = 300;
+const double _kScrollFastSpeed = 1200;
+const double _kScrollSlowPxPerNotch = 60;
+const double _kScrollMidPxPerNotch = 35;
+const double _kScrollFastPxPerNotch = 20;
+const int _kScrollIdleResetUs = 150 * 1000;
+
 class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
   final FFI ffi;
@@ -94,12 +109,18 @@ class _RawTouchGestureDetectorRegionState
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
   bool _twoFingerCanvasChanged = false;
-  // Locks a two-finger gesture to one intent so a scroll does not turn into a
-  // canvas pan/zoom when the fingers drift sideways or slightly apart.
-  // 0 = undecided (dead zone), 1 = scroll, 2 = canvas pan/zoom.
+  // 0 = undecided, 1 = scroll, 2 = canvas pan/zoom.
   int _twoFingerMode = 0;
-  Offset _twoFingerDrift = Offset.zero;
-  double _twoFingerScaleDrift = 0;
+  final Map<int, Offset> _intentTouchStart = {};
+  final Map<int, Offset> _intentTouchLast = {};
+  List<int> _intentPointers = const [];
+  int _intentStartUs = 0;
+  int _intentLastSampleUs = 0;
+  int _intentScrollVotes = 0;
+  int _intentZoomVotes = 0;
+  Timer? _intentTimer;
+  double _scrollVelocity = 0;
+  int _lastScrollUs = 0;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -124,12 +145,30 @@ class _RawTouchGestureDetectorRegionState
   bool get handleTouch => (isDesktop || isWebDesktop) || ffiModel.touchMode;
   SessionID get sessionId => ffi.sessionId;
   bool get canvasLocked => isMobile && ffi.canvasModel.locked;
+  bool get _useTwoFingerScroll =>
+      !isDesktop &&
+      !isWebDesktop &&
+      !widget.isCamera &&
+      !ffi.ffiModel.isPeerAndroid;
+  int get _nowUs => DateTime.now().microsecondsSinceEpoch;
+
+  @override
+  void dispose() {
+    _intentTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return RawGestureDetector(
-      child: widget.child,
-      gestures: makeGestures(context),
+    return Listener(
+      onPointerDown: _onIntentPointerDown,
+      onPointerMove: _onIntentPointerMove,
+      onPointerUp: _onIntentPointerUp,
+      onPointerCancel: _onIntentPointerCancel,
+      child: RawGestureDetector(
+        child: widget.child,
+        gestures: makeGestures(context),
+      ),
     );
   }
 
@@ -454,14 +493,192 @@ class _RawTouchGestureDetectorRegionState
     _touchModePanStarted = false;
   }
 
+  void _onIntentPointerDown(PointerDownEvent event) {
+    if (!_useTwoFingerScroll ||
+        !kTouchBasedDeviceKinds.contains(event.kind)) {
+      return;
+    }
+    _intentTouchStart[event.pointer] = event.localPosition;
+    _intentTouchLast[event.pointer] = event.localPosition;
+    if (_intentTouchStart.length > 2) {
+      _cancelTwoFingerIntent();
+      return;
+    }
+    if (_intentTouchStart.length == 2) {
+      _startTwoFingerIntent();
+    }
+  }
+
+  void _onIntentPointerMove(PointerMoveEvent event) {
+    if (!_intentTouchStart.containsKey(event.pointer)) return;
+    _intentTouchLast[event.pointer] = event.localPosition;
+    if (_twoFingerMode != 0 || _intentPointers.length != 2) return;
+    _sampleTwoFingerIntent();
+  }
+
+  void _onIntentPointerUp(PointerUpEvent event) {
+    _removeIntentPointer(event.pointer);
+  }
+
+  void _onIntentPointerCancel(PointerCancelEvent event) {
+    _removeIntentPointer(event.pointer);
+  }
+
+  void _removeIntentPointer(int pointer) {
+    if (!_intentTouchStart.containsKey(pointer)) return;
+    _intentTouchStart.remove(pointer);
+    _intentTouchLast.remove(pointer);
+    if (_intentTouchStart.length < 2 || _intentPointers.contains(pointer)) {
+      _cancelTwoFingerIntent();
+    }
+  }
+
+  void _startTwoFingerIntent() {
+    _intentTimer?.cancel();
+    _intentPointers =
+        _intentTouchStart.keys.take(2).toList(growable: false);
+    _intentStartUs = _nowUs;
+    _intentLastSampleUs = _intentStartUs;
+    _intentScrollVotes = 0;
+    _intentZoomVotes = 0;
+    _twoFingerMode = 0;
+    _mouseScrollIntegral = 0;
+    _scrollVelocity = 0;
+    _lastScrollUs = 0;
+    _intentTimer = Timer(
+      const Duration(microseconds: _kTwoFingerIntentWindowUs),
+      _onIntentWindowEnd,
+    );
+  }
+
+  void _sampleTwoFingerIntent() {
+    final nowUs = _nowUs;
+    final elapsedUs = nowUs - _intentStartUs;
+    if (elapsedUs < _kTwoFingerIntentWarmupUs) return;
+    if (elapsedUs >= _kTwoFingerIntentMaxWindowUs) {
+      _finishTwoFingerIntent();
+      return;
+    }
+    if (nowUs - _intentLastSampleUs < _kTwoFingerIntentSampleGapUs) return;
+    final start1 = _intentTouchStart[_intentPointers[0]];
+    final start2 = _intentTouchStart[_intentPointers[1]];
+    final last1 = _intentTouchLast[_intentPointers[0]];
+    final last2 = _intentTouchLast[_intentPointers[1]];
+    if (start1 == null || start2 == null || last1 == null || last2 == null) {
+      return;
+    }
+    final v1 = last1 - start1;
+    final v2 = last2 - start2;
+    if (v1.distance < _kTwoFingerIntentMinSamplePx ||
+        v2.distance < _kTwoFingerIntentMinSamplePx) {
+      return;
+    }
+    _intentLastSampleUs = nowUs;
+    final dot = v1.dx * v2.dx + v1.dy * v2.dy;
+    if (dot < 0) {
+      _intentZoomVotes++;
+    } else {
+      final cos = (dot / (v1.distance * v2.distance)).clamp(-1.0, 1.0);
+      final angle = acos(cos) * 180 / pi;
+      if (angle < _kTwoFingerIntentScrollAngleDeg) {
+        _intentScrollVotes++;
+      }
+    }
+    if (_intentZoomVotes >= _kTwoFingerIntentMinSamples) {
+      _lockTwoFingerMode(uuState.active.pinchZoom ? 2 : 1);
+    } else if (_intentScrollVotes >= _kTwoFingerIntentMinSamples) {
+      _lockTwoFingerMode(1);
+    }
+  }
+
+  void _onIntentWindowEnd() {
+    if (_twoFingerMode != 0 || _intentPointers.length != 2) return;
+    final elapsedUs = _nowUs - _intentStartUs;
+    if (elapsedUs < _kTwoFingerIntentMaxWindowUs) {
+      _intentTimer = Timer(
+        Duration(microseconds: _kTwoFingerIntentMaxWindowUs - elapsedUs),
+        _onIntentWindowEnd,
+      );
+      return;
+    }
+    _finishTwoFingerIntent();
+  }
+
+  void _finishTwoFingerIntent() {
+    if (_twoFingerMode != 0) return;
+    _lockTwoFingerMode(
+      _intentZoomVotes >= _kTwoFingerIntentMinSamples &&
+              uuState.active.pinchZoom
+          ? 2
+          : 1,
+    );
+  }
+
+  void _lockTwoFingerMode(int mode) {
+    if (_twoFingerMode != 0) return;
+    _twoFingerMode = mode;
+    _intentTimer?.cancel();
+    _intentTimer = null;
+  }
+
+  void _cancelTwoFingerIntent() {
+    _intentTimer?.cancel();
+    _intentTimer = null;
+    _intentPointers = const [];
+    _intentStartUs = 0;
+    _intentLastSampleUs = 0;
+    _intentScrollVotes = 0;
+    _intentZoomVotes = 0;
+    _twoFingerMode = 0;
+    _mouseScrollIntegral = 0;
+    _scrollVelocity = 0;
+    _lastScrollUs = 0;
+  }
+
+  void _addScrollDelta(double dy) {
+    final nowUs = _nowUs;
+    if (_lastScrollUs == 0) {
+      _lastScrollUs = nowUs;
+    } else {
+      final dtUs = nowUs - _lastScrollUs;
+      _lastScrollUs = nowUs;
+      if (dtUs >= _kScrollIdleResetUs) {
+        _scrollVelocity = 0;
+      } else if (dtUs > 0) {
+        final speed = dy / (dtUs / 1000000);
+        _scrollVelocity = 0.7 * _scrollVelocity + 0.3 * speed;
+      }
+    }
+    final speed = _scrollVelocity.abs();
+    final double pxPerNotch;
+    if (speed < _kScrollSlowSpeed) {
+      pxPerNotch = _kScrollSlowPxPerNotch;
+    } else if (speed > _kScrollFastSpeed) {
+      pxPerNotch = _kScrollFastPxPerNotch;
+    } else {
+      final t = (speed - _kScrollSlowSpeed) /
+          (_kScrollFastSpeed - _kScrollSlowSpeed);
+      pxPerNotch = _kScrollSlowPxPerNotch +
+          t * (_kScrollMidPxPerNotch - _kScrollSlowPxPerNotch);
+    }
+    _mouseScrollIntegral += dy / pxPerNotch;
+    final notches = _mouseScrollIntegral.truncate();
+    if (notches == 0) return;
+    final clamped = notches.clamp(-2, 2).toInt();
+    final step = clamped.sign;
+    for (var i = 0; i < clamped.abs(); i++) {
+      inputModel.scroll(step);
+    }
+    _mouseScrollIntegral -= clamped;
+  }
+
   // scale + pan event
   onTwoFingerScaleStart(ScaleStartDetails d) {
     _lastTapDownDetails = null;
     _twoFingerCanvasChanged = false;
     _mouseScrollIntegral = 0;
-    _twoFingerMode = 0;
-    _twoFingerDrift = Offset.zero;
-    _twoFingerScaleDrift = 0;
+    _scrollVelocity = 0;
+    _lastScrollUs = 0;
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -487,47 +704,14 @@ class _RawTouchGestureDetectorRegionState
 
     // Two-finger vertical swipe scrolls the remote side; pinch zooms and
     // horizontal moves pan the canvas. Three fingers are left to the OS.
-    final useTwoFingerScroll = !isDesktop &&
-        !isWebDesktop &&
-        !widget.isCamera &&
-        !ffi.ffiModel.isPeerAndroid;
-    if (useTwoFingerScroll) {
-      final allowPinch = uuState.active.pinchZoom;
-      if (_twoFingerMode == 0) {
-        _twoFingerDrift += d.focalPointDelta;
-        final scaleDrift = (d.scale - 1).abs();
-        if (scaleDrift > _twoFingerScaleDrift) {
-          _twoFingerScaleDrift = scaleDrift;
-        }
-        // Hold off until the intent is unambiguous: a scroll that starts
-        // slightly diagonal or with a bit of finger drift must stay a scroll.
-        // No dead zone: the wheel engages on the first pixel of movement.
-        if (_twoFingerScaleDrift >= 0.06) {
-          _twoFingerMode = allowPinch ? 2 : 0;
-        } else if (_twoFingerDrift.distance > 0) {
-          _twoFingerMode =
-              _twoFingerDrift.dy.abs() > _twoFingerDrift.dx.abs() * 1.2
-                  ? 1
-                  : (allowPinch ? 2 : 0);
-        }
-      }
+    if (_useTwoFingerScroll) {
+      // The pointer listener locks the intent before any canvas movement.
+      if (_twoFingerMode == 0) return;
       if (_twoFingerMode == 1) {
-        _mouseScrollIntegral += d.focalPointDelta.dy / 4;
-        if (_mouseScrollIntegral > 1) {
-          inputModel.scroll(1);
-          _mouseScrollIntegral = 0;
-        } else if (_mouseScrollIntegral < -1) {
-          inputModel.scroll(-1);
-          _mouseScrollIntegral = 0;
-        }
+        _addScrollDelta(d.focalPointDelta.dy);
         return;
       }
-      if (_twoFingerMode != 2) {
-        return;
-      }
-      if (!allowPinch) {
-        return;
-      }
+      if (!uuState.active.pinchZoom) return;
     }
 
     if (canvasLocked) return;
@@ -570,7 +754,7 @@ class _RawTouchGestureDetectorRegionState
     } else {
       // mobile
       _scale = 1;
-      _twoFingerMode = 0;
+      _cancelTwoFingerIntent();
       if (_twoFingerCanvasChanged) {
         _twoFingerCanvasChanged = false;
         ffi.canvasModel.snapCanvas();

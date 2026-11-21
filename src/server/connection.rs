@@ -1993,6 +1993,7 @@ impl Connection {
                 json!(privacy_mode::get_supported_privacy_mode_impl()),
             );
             platform_additions.insert("uu_host_control".into(), json!(true));
+            platform_additions.insert("uu_auto_unlock".into(), json!(true));
         }
         #[cfg(target_os = "macos")]
         {

@@ -5,6 +5,7 @@
 #include <xpsprint.h>
 #include <cstdio>
 #include <cstdint>
+#include <cwchar>
 #include <intrin.h>
 #include <string>
 #include <memory>
@@ -373,6 +374,102 @@ extern "C"
         }
 
         return true;
+    }
+
+    // The lock screen and UAC both live on the "Winlogon" desktop, so look for
+    // the LogonUI process before treating it as a lock screen to type into.
+    static BOOL CALLBACK findLogonUIWindow(HWND hwnd, LPARAM lParam)
+    {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid == 0)
+            return TRUE;
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (process == NULL)
+            return TRUE;
+        WCHAR path[MAX_PATH];
+        DWORD size = MAX_PATH;
+        BOOL ok = QueryFullProcessImageNameW(process, 0, path, &size);
+        CloseHandle(process);
+        if (!ok)
+            return TRUE;
+        const WCHAR *base = wcsrchr(path, L'\\');
+        base = base ? base + 1 : path;
+        if (_wcsicmp(base, L"LogonUI.exe") == 0)
+        {
+            *reinterpret_cast<BOOL *>(lParam) = TRUE;
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    BOOL
+    isInputDesktopLockScreen()
+    {
+        HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_ENUMERATE);
+        if (!input)
+            return FALSE;
+        WCHAR name[256];
+        DWORD size = 0;
+        BOOL winlogon = GetUserObjectInformation(input, UOI_NAME, name, sizeof(name), &size) &&
+                        _wcsicmp(name, L"Winlogon") == 0;
+        if (!winlogon)
+        {
+            CloseDesktop(input);
+            return FALSE;
+        }
+        BOOL found = FALSE;
+        EnumDesktopWindows(input, findLogonUIWindow, reinterpret_cast<LPARAM>(&found));
+        CloseDesktop(input);
+        return found;
+    }
+
+    // The calling thread must already be attached to the input desktop; these
+    // helpers only inject, they never switch or verify the desktop themselves.
+    int
+    injectUnicodeText(const WCHAR *text, int len)
+    {
+        int sent = 0;
+        for (int i = 0; i < len; i++)
+        {
+            INPUT in[2];
+            ZeroMemory(in, sizeof(in));
+            in[0].type = INPUT_KEYBOARD;
+            in[0].ki.wScan = text[i];
+            in[0].ki.dwFlags = KEYEVENTF_UNICODE;
+            in[1] = in[0];
+            in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+            if (SendInput(2, in, sizeof(INPUT)) == 2)
+                sent++;
+            Sleep(12);
+        }
+        return sent;
+    }
+
+    void injectEnterKey()
+    {
+        INPUT in[2];
+        ZeroMemory(in, sizeof(in));
+        in[0].type = INPUT_KEYBOARD;
+        in[0].ki.wVk = VK_RETURN;
+        in[1] = in[0];
+        in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(2, in, sizeof(INPUT));
+    }
+
+    void injectBackspaceKey(int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            INPUT in[2];
+            ZeroMemory(in, sizeof(in));
+            in[0].type = INPUT_KEYBOARD;
+            in[0].ki.wVk = VK_BACK;
+            in[1] = in[0];
+            in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(2, in, sizeof(INPUT));
+            Sleep(8);
+        }
     }
 
     int handleMask(uint8_t *rwbuffer, const uint8_t *mask, int width, int height, int bmWidthBytes, int bmHeight)

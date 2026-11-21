@@ -575,6 +575,10 @@ extern "C" {
     ) -> BOOL;
     fn selectInputDesktop() -> BOOL;
     fn inputDesktopSelected() -> BOOL;
+    fn isInputDesktopLockScreen() -> BOOL;
+    fn injectUnicodeText(text: *const u16, len: i32) -> i32;
+    fn injectEnterKey();
+    fn injectBackspaceKey(count: i32);
     fn is_windows_server() -> BOOL;
     fn is_windows_10_or_greater() -> BOOL;
     fn handleMask(
@@ -1048,6 +1052,38 @@ pub fn try_change_desktop() -> bool {
         }
     }
     return false;
+}
+
+/// True only while the session's input desktop is the Windows lock screen.
+pub fn is_lock_screen_active() -> bool {
+    unsafe { isInputDesktopLockScreen() == TRUE }
+}
+
+/// Attaches the calling thread to the input desktop, reporting success even
+/// when the thread was already there.
+pub fn ensure_input_desktop() -> bool {
+    unsafe {
+        if inputDesktopSelected() == TRUE {
+            true
+        } else {
+            selectInputDesktop() == TRUE
+        }
+    }
+}
+
+pub fn inject_unicode_text(units: &[u16]) -> usize {
+    if units.is_empty() {
+        return 0;
+    }
+    unsafe { injectUnicodeText(units.as_ptr(), units.len() as i32).max(0) as usize }
+}
+
+pub fn inject_enter() {
+    unsafe { injectEnterKey() }
+}
+
+pub fn inject_backspaces(count: usize) {
+    unsafe { injectBackspaceKey(count.min(i32::MAX as usize) as i32) }
 }
 
 fn share_rdp() -> BOOL {

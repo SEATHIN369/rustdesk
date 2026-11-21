@@ -80,4 +80,7 @@ pub mod virtual_display_manager;
 #[cfg(windows)]
 pub mod host_controls;
 
+#[cfg(windows)]
+pub mod auto_unlock;
+
 mod kcp_stream;

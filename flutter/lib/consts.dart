@@ -467,6 +467,8 @@ class AndroidChannel {
   static final kGetStartOnBootOpt = "get_start_on_boot_opt";
   static final kSetStartOnBootOpt = "set_start_on_boot_opt";
   static final kSyncAppDirConfigPath = "sync_app_dir";
+  static final kAutoUnlockEncrypt = "auto_unlock_encrypt";
+  static final kAutoUnlockDecrypt = "auto_unlock_decrypt";
   static final kPickImportFiles = "pick_import_files";
   static final kImportFile = "import_file";
   static final kExportFile = "export_file";

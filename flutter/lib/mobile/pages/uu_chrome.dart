@@ -11,6 +11,7 @@ import '../../common/widgets/dialog.dart';
 import '../../consts.dart';
 import '../../models/platform_model.dart';
 import '../../models/uu_state.dart';
+import '../auto_unlock_config.dart';
 import 'remote_page.dart';
 
 const String _kPrivacyVdImpl = 'privacy_mode_impl_virtual_display';
@@ -1379,19 +1380,32 @@ class _AutoUnlockTile extends StatefulWidget {
 
 class _AutoUnlockTileState extends State<_AutoUnlockTile> {
   Map<String, dynamic> _cfg = {};
-
-  String get _key => 'uu-auto-unlock:${widget.id}';
+  String _pwd = '';
+  bool _decryptFailed = false;
 
   @override
   void initState() {
     super.initState();
-    try {
-      final raw = bind.mainGetLocalOption(key: _key);
-      if (raw.isNotEmpty) _cfg = json.decode(raw) as Map<String, dynamic>;
-    } catch (_) {}
+    _cfg = AutoUnlockConfig.load(widget.id);
+    _loadPassword();
   }
 
-  void _store() => bind.mainSetLocalOption(key: _key, value: json.encode(_cfg));
+  Future<void> _loadPassword() async {
+    final enc = _cfg['enc']?.toString() ?? '';
+    final pwd = await AutoUnlockConfig.password(_cfg);
+    if (!mounted) return;
+    setState(() {
+      _pwd = pwd ?? '';
+      _decryptFailed = enc.isNotEmpty && pwd == null;
+    });
+    if ((_cfg['pwd']?.toString() ?? '').isNotEmpty) {
+      AutoUnlockConfig.migrate(widget.id, _cfg).then((ok) {
+        if (ok && mounted) setState(() {});
+      });
+    }
+  }
+
+  void _store() => AutoUnlockConfig.save(widget.id, _cfg);
 
   static String _wsCodes(String s) {
     final codes = <String>[];
@@ -1427,7 +1441,9 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
 
   @override
   Widget build(BuildContext context) {
-    final pwd = _cfg['pwd']?.toString() ?? '';
+    final pwd = _pwd;
+    final supported = gFFI.ffiModel.pi.platform == kPeerPlatformWindows &&
+        gFFI.ffiModel.pi.platformAdditions['uu_auto_unlock'] == true;
     return Column(
       children: [
         SwitchListTile(
@@ -1446,9 +1462,12 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: const Text('登录密码',
               style: TextStyle(color: Colors.white, fontSize: 13)),
-          subtitle: Text(_pwdSummary(pwd),
+          subtitle: Text(
+              _decryptFailed
+                  ? '已保存的密码无法解密（应用数据可能被清除），请重设'
+                  : _pwdSummary(pwd),
               style: TextStyle(
-                  color: _hasFullWidthSpace(pwd)
+                  color: _decryptFailed || _hasFullWidthSpace(pwd)
                       ? Colors.amber
                       : Colors.white38,
                   fontSize: 11)),
@@ -1474,8 +1493,8 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
                         smartDashesType: SmartDashesType.disabled,
                         smartQuotesType: SmartQuotesType.disabled,
                         onChanged: (_) => setDlgState(() {}),
-                        decoration:
-                            const InputDecoration(hintText: '仅保存在本机配置中'),
+                        decoration: const InputDecoration(
+                            hintText: '使用系统密钥库加密保存在本机'),
                       ),
                       const SizedBox(height: 10),
                       Row(children: [
@@ -1522,14 +1541,60 @@ class _AutoUnlockTileState extends State<_AutoUnlockTile> {
               ),
             ));
             if (ok != true || !mounted) return;
-            setState(() => _cfg['pwd'] = controller.text);
+            final plain = controller.text;
+            if (plain.isEmpty) {
+              setState(() {
+                _cfg.remove('enc');
+                _cfg.remove('pwd');
+                _pwd = '';
+                _decryptFailed = false;
+              });
+              _store();
+              return;
+            }
+            final enc = await AutoUnlockConfig.encrypt(plain);
+            if (enc == null) {
+              if (mounted) showToast('无法安全保存密码：需要 Android 6.0 以上');
+              return;
+            }
+            setState(() {
+              _cfg['enc'] = enc;
+              _cfg.remove('pwd');
+              _pwd = plain;
+              _decryptFailed = false;
+            });
             _store();
           },
         ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text('连接建立 2 秒后自动输入密码并回车。仅在电脑处于锁屏时开启；未锁屏时密码会被输入到当前焦点窗口。',
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          enabled: supported && _pwd.isNotEmpty,
+          title: const Text('立即尝试解锁',
+              style: TextStyle(color: Colors.white, fontSize: 13)),
+          subtitle: const Text('仅在电脑锁屏时注入；主机最多自动重试 3 次',
               style: TextStyle(color: Colors.white38, fontSize: 11)),
+          trailing: Icon(Icons.lock_open,
+              color: supported && _pwd.isNotEmpty
+                  ? Colors.white54
+                  : Colors.white24,
+              size: 18),
+          onTap: () async {
+            final sid = gFFI.sessionId;
+            bind.sessionTogglePrivacyMode(
+                sessionId: sid,
+                implKey: 'uu:unlock:${base64Encode(utf8.encode(_pwd))}',
+                on: true);
+            showToast('已发送解锁指令');
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+              supported
+                  ? '连接后由主机判断是否锁屏并在锁屏上输入密码，未锁屏不会注入；失败自动重试。'
+                  : '当前主机版本不支持闭环自动解锁，将退回旧的一次性输入方式。',
+              style: const TextStyle(color: Colors.white38, fontSize: 11)),
         ),
       ],
     );

@@ -728,6 +728,30 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                 }
+                "auto_unlock_encrypt" -> {
+                    val plain = call.arguments as? String
+                    if (plain == null) {
+                        result.error("invalid_arguments", "Expected a string", null)
+                    } else {
+                        try {
+                            result.success(AutoUnlockCrypto.encrypt(plain))
+                        } catch (e: Exception) {
+                            result.error("encrypt_failed", e.message, null)
+                        }
+                    }
+                }
+                "auto_unlock_decrypt" -> {
+                    val payload = call.arguments as? String
+                    if (payload == null) {
+                        result.error("invalid_arguments", "Expected a string", null)
+                    } else {
+                        try {
+                            result.success(AutoUnlockCrypto.decrypt(payload))
+                        } catch (e: Exception) {
+                            result.error("decrypt_failed", e.message, null)
+                        }
+                    }
+                }
                 "on_voice_call_started" -> {
                     onVoiceCallStarted()
                 }

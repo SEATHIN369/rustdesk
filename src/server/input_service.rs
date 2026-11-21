@@ -2242,7 +2242,11 @@ fn legacy_keyboard_mode(evt: &KeyEvent) {
 
             process_unicode(&mut en, chr)
         }
-        Some(key_event::Union::Seq(ref seq)) => process_seq(&mut en, seq),
+        Some(key_event::Union::Seq(ref seq)) => {
+            #[cfg(target_os = "windows")]
+            log_seq_input_profile(seq);
+            process_seq(&mut en, seq)
+        }
         _ => {}
     }
 

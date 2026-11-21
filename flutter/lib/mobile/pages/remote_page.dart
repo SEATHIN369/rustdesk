@@ -25,6 +25,7 @@ import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../models/uu_state.dart';
 import '../../utils/image.dart';
+import '../auto_unlock_config.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
 import 'uu_chrome.dart';
@@ -539,33 +540,44 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  // UU-style auto unlock: type the stored Windows password once the first
-  // frame arrives. Only meaningful while the peer sits at the lock screen.
+  // UU-style auto unlock: let the host detect the lock screen and verify the
+  // result. Hosts without the capability fall back to typing the password
+  // through the sequence path, once.
   void _tryAutoUnlock(String peerId) {
     if (_autoUnlockDone) return;
     _autoUnlockDone = true;
     if (gFFI.ffiModel.pi.platform != kPeerPlatformWindows) return;
-    Map<String, dynamic> cfg = {};
-    try {
-      final raw = bind.mainGetLocalOption(key: 'uu-auto-unlock:$peerId');
-      if (raw.isEmpty) return;
-      cfg = json.decode(raw) as Map<String, dynamic>;
-    } catch (_) {
-      return;
-    }
+    final sid = gFFI.sessionId;
+    _autoUnlock(peerId, sid);
+  }
+
+  Future<void> _autoUnlock(String peerId, SessionID sid) async {
+    final cfg = AutoUnlockConfig.load(peerId);
     if (cfg['on'] != true) return;
-    final pwd = cfg['pwd']?.toString() ?? '';
-    if (pwd.isEmpty) return;
-    Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
+    final pwd = await AutoUnlockConfig.password(cfg);
+    if (pwd == null || pwd.isEmpty) return;
+    // Let the connection settle; a password sent to a replaced session is lost.
+    await Future.delayed(const Duration(milliseconds: 1200));
+    if (!mounted || gFFI.sessionId != sid) return;
+    if (_supportsHostAutoUnlock()) {
+      bind.sessionTogglePrivacyMode(
+          sessionId: sid,
+          implKey: 'uu:unlock:${base64Encode(utf8.encode(pwd))}',
+          on: true);
+      showToast('已尝试自动解锁，失败请手动输入');
+    } else {
       // Per-char inputKey goes through the legacy Chr path; the lock screen
       // only reliably accepts the sequence path used by manual IME typing.
-      bind.sessionInputString(sessionId: gFFI.sessionId, value: pwd);
-      Timer(const Duration(milliseconds: 400), () {
-        if (!mounted) return;
-        gFFI.inputModel.inputKey('VK_RETURN');
-      });
-    });
+      bind.sessionInputString(sessionId: sid, value: pwd);
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!mounted || gFFI.sessionId != sid) return;
+      gFFI.inputModel.inputKey('VK_RETURN');
+    }
+  }
+
+  bool _supportsHostAutoUnlock() {
+    final additions = gFFI.ffiModel.pi.platformAdditions;
+    return additions['uu_auto_unlock'] == true;
   }
 
   void _hideIme() {

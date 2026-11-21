@@ -453,6 +453,16 @@ pub fn handle_command(key: &str, on: bool) -> bool {
             true
         }
         _ => {
+            if let Some(encoded) = key.strip_prefix("unlock:") {
+                match crate::common::decode64(encoded)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                {
+                    Some(password) => crate::auto_unlock::request_unlock(password),
+                    None => hbb_common::log::warn!("Auto unlock: invalid payload"),
+                }
+                return true;
+            }
             if let Some(size) = key.strip_prefix("display:") {
                 if let Some((w, h)) = size.split_once('x') {
                     if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {

@@ -328,6 +328,7 @@ lazy_static::lazy_static! {
 /// choice is applied; a scale the user picked in Settings is kept and mirrored
 /// into our own state.
 pub fn on_privacy_display_ready(device: &str) {
+    let device = device.trim_end_matches('\0');
     *PRIVACY_DISPLAY.lock().unwrap() = Some(device.to_owned());
     let stored = STATE.lock().unwrap().dpi_scale;
     let mut info = None;

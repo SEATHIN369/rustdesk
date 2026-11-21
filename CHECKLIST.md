@@ -8,7 +8,7 @@
 ## 工件与环境
 
 - 分支：`local/1.5.3-android` @ `e0da6b7f4`，已推 fork（github.com/kitsuneMori96/rustdesk）
-- 主机 DLL：36,236,800 B，SHA256 `6DA63C9C…6F11`，已部署到 `D:\soft\apps\RustDesk`（17:09 起服务运行，`--server` 在会话 1）
+- 主机 DLL：36,238,336 B，SHA256 `ABC99FC7…E4B6`，已部署到 `D:\soft\apps\RustDesk`（18:06 起服务运行，`--server` 在会话 1）
 - 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-1712.apk`，29,282,884 B，SHA256 `F7FFEBA1…23AA`
 - 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,606 B；补丁 8 个文件，已验证能打在 tag 1.5.3 上
 - 构建脚本：`C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat`（主机）/ `build_apk.bat`（APK）
@@ -20,7 +20,8 @@
 - T17 第五格「画质」
 - T18 官方白色鼠标按键应消失
 - T25 / T28 防窥不再弹「进入/退出」提示
-- T26 / T27 Windows 设置里的缩放显示 125%（或你选的值）
+- T26 / T27 防窥时 Windows 设置里只应有 1 个屏，缩放显示 125%（或你选的值）
+- 若仍有多屏：把日志里 `Privacy mode disabled extra display …` 行发我
 - T29 / T39 单空格密码自动解锁；失败就把日志里的 `Seq input` 行发我
 
 ## 1. 产品目标
@@ -83,7 +84,7 @@
 - T23 关「断开后恢复声音」→ 静音 → 断开：保持静音，重连仍静音 → ✅
 - T24 开防窥后直接断开：物理屏必亮 → 🗑 已并入其他项
 - T25 防窥中重连：断开还原、重连自动重新关屏 → 🔄 待真机（用户：启动前先报失败又报成功；进入隐式模式提示去掉，每次连接都打扰）。已改：commit 4 次重试；进入 / 退出提示与失败弹窗全删，失败只 toast
-- T26 缩放选 125% 后开防窥：分辨率不变、界面变大 → 🔄 待真机（用户：仍 100%，手机 UI 与实际不符）。已改：DisplayConfig -3/-4，Windows 设置里可见可手改；默认 125；防窥期间改缩放即时生效
+- T26 缩放选 125% 后开防窥：分辨率不变、界面变大 → 🔄 待真机（用户：仍 100%，手机 UI 与实际不符）。已改两轮：①DisplayConfig -3/-4；②修复虚拟屏名字带 NUL 导致查不到（此前自动应用从未生效，日志连续 `not found`），现设备名截断后再匹配。另：防窥 commit 会激活其他驱动残留的「已挂载无模式」虚拟屏（本机 UU/GameViewer 有 9 个），commit 后会把多余活动屏禁用，日志 `Privacy mode disabled extra display …`
 - T27 分辨率 1536x864 + 缩放 125%：两者独立生效 → ⬜ 待真机
 - T28 防窥开关全过程：立即转圈、4s 预插、失败回滚 → 🔄 待真机（用户：同上）。重试与去提示见 T25
 - T29 自动解锁（密码 = 单个空格）：锁屏后自动输密码 + 回车成功 → 🔄 待真机（用户：仍报密码错误）。已改：Seq 文本注入前切输入桌面；日志新增 `Seq input: len=… space=…` 与 `Desktop switched`
@@ -125,3 +126,4 @@
 - 16:20 打包推送第一轮修正（DLL `BA20BEE2`、APK `6D737A76`、协作者包 7 文件补丁）。
 - 17:13 第二轮：真 DPI（DisplayConfig）、防窥重试去提示、锁屏文本切桌面、第五格画质、隐藏鼠标按键、gradle 堆 2G（DLL `6DA63C9C`、APK `F7FFEBA1`）。
 - 17:30 清单改为列表式，清理过时数字与文案。
+- 18:06 真机复测反馈（缩放生效但出现一堆虚拟屏）：定位到虚拟屏名字尾随 NUL 导致 DisplayConfig 匹配失败（自动缩放从未生效），并确认本机另有 UU/GameViewer IDD 残留 9 个已挂载幽灵屏；commit 后新增多余活动屏禁用逻辑，分辨率下发改用正确设备名。DLL `ABC99FC7` 已部署。

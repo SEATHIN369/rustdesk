@@ -189,10 +189,17 @@ impl PrivacyModeImpl {
         }
     }
 
+    fn wchar_array_to_string(name: &[WCHAR]) -> String {
+        let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        String::from_utf16_lossy(&name[..len])
+    }
+
     fn set_primary_display(&mut self) -> ResultType<String> {
         // Multiple virtual displays with different origins are tested.
         let display = &self.virtual_displays[0];
-        let display_name = std::string::String::from_utf16(&display.name)?;
+        // The fixed-size WCHAR array is NUL padded; keep only the name, it is
+        // used as a key for DisplayConfig and platform::change_resolution.
+        let display_name = Self::wchar_array_to_string(&display.name);
 
         #[allow(invalid_value)]
         let mut new_primary_dm: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
@@ -335,6 +342,70 @@ impl PrivacyModeImpl {
                     bail!("Failed ChangeDisplaySettingsEx, {}", err);
                 }
             }
+        }
+        Ok(())
+    }
+
+    // A topology reset activates displays that were merely attached before,
+    // e.g. stale virtual monitors left by other IDD drivers (GameViewer/UU),
+    // so the user sees a wall of screens in Windows Settings. Privacy mode must
+    // leave exactly one active display, the one picked for this session.
+    fn disable_extra_displays(&mut self, keep: &str) -> ResultType<()> {
+        let mut disabled = 0;
+        let mut i: DWORD = 0;
+        loop {
+            #[allow(invalid_value)]
+            let mut dd: DISPLAY_DEVICEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
+            if FALSE == unsafe { EnumDisplayDevicesW(std::ptr::null(), i, &mut dd as _, 0) } {
+                break;
+            }
+            i += 1;
+            if 0 == (dd.StateFlags & DISPLAY_DEVICE_ACTIVE)
+                || (dd.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) > 0
+            {
+                continue;
+            }
+            let name = Self::wchar_array_to_string(&dd.DeviceName);
+            if name.eq_ignore_ascii_case(keep) {
+                continue;
+            }
+            #[allow(invalid_value)]
+            let mut dm: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
+            dm.dmDriverExtra = 0;
+            let ok = unsafe {
+                EnumDisplaySettingsW(dd.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut dm)
+            };
+            if FALSE == ok || dm.dmPelsWidth == 0 || dm.dmPelsHeight == 0 {
+                continue;
+            }
+            let (w, h) = (dm.dmPelsWidth, dm.dmPelsHeight);
+            unsafe {
+                dm.u1.s2_mut().dmPosition.x = 10000;
+                dm.u1.s2_mut().dmPosition.y = 10000;
+            }
+            dm.dmPelsWidth = 0;
+            dm.dmPelsHeight = 0;
+            dm.dmFields |= DM_POSITION;
+            let rc = unsafe {
+                ChangeDisplaySettingsExW(
+                    dd.DeviceName.as_ptr(),
+                    &mut dm,
+                    std::ptr::null_mut(),
+                    CDS_UPDATEREGISTRY | CDS_NORESET,
+                    std::ptr::null_mut(),
+                )
+            };
+            if rc != DISP_CHANGE_SUCCESSFUL {
+                log::warn!("Failed to disable extra display {name}: ret {rc}");
+                continue;
+            }
+            log::info!("Privacy mode disabled extra display {name} ({w}x{h})");
+            disabled += 1;
+        }
+        if disabled > 0 {
+            Self::commit_change_display(CDS_RESET)?;
         }
         Ok(())
     }
@@ -537,6 +608,9 @@ impl PrivacyMode for PrivacyModeImpl {
         if !last_err.is_empty() {
             bail!("Failed ChangeDisplaySettingsEx, {}", last_err);
         }
+        // Displays that only existed as attached-but-inactive entries (stale
+        // virtual monitors from other IDD drivers) get activated by the reset.
+        allow_err!(guard.disable_extra_displays(&primary_display_name));
         // Explicitly set the resolution(virtual display) to the size chosen by the client.
         let (width, height) = desired_mode();
         allow_err!(crate::platform::change_resolution(

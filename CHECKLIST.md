@@ -3,14 +3,15 @@
 约定：你直接加行、改期望、在结果里写现象；我回填状态与证据。不要写密码 / Peer ID / 公网 IP。
 状态：⬜ 待测 ｜ 🔄 进行中 ｜ ✅ 通过 ｜ ❌ 失败 ｜ ⏸ 阻塞 ｜ 🗑 废弃
 
-最近更新：2026-11-21 18:08
+最近更新：2026-11-21 19:02
 
 ## 工件与环境
 
-- 分支：`local/1.5.3-android` @ `c5a18c2f1`，已推 fork（github.com/kitsuneMori96/rustdesk）
+- 分支：`local/1.5.3-android` @ `ef8ebc794`，已推 fork（github.com/kitsuneMori96/rustdesk）
 - 主机 DLL：36,238,336 B，SHA256 `ABC99FC7…E4B6`，已部署到 `D:\soft\apps\RustDesk`（18:06 起服务运行，`--server` 在会话 1）
 - 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-1712.apk`，29,282,884 B，SHA256 `F7FFEBA1…23AA`
 - 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,253 B（18:07 重打）；补丁 8 个文件，已验证能打在 tag 1.5.3 上
+- 分发测试包（Windows 便携应用）：`D:\Download\共享文件夹\rustdesk-uu-host-win64-test-2026-11-21.zip`，32,513,659 B，SHA256 `6CC07D55…9ECC`（18:59 打包：官方 1.5.3+71 exe + 自编译 DLL + 插件/驱动/虚拟屏，不含配置与备份 DLL，附 README-TEST.txt）
 - 构建脚本：`C:\Users\Administrator\AppData\Local\Temp\rd-build\build.bat`（主机）/ `build_apk.bat`（APK）
 - 主机安装目录：官方备份 `librustdesk.dll.official-1.5.3.bak`，上一版自编译 `librustdesk.dll.selfbuild-prev.bak`
 
@@ -127,3 +128,4 @@
 - 17:13 第二轮：真 DPI（DisplayConfig）、防窥重试去提示、锁屏文本切桌面、第五格画质、隐藏鼠标按键、gradle 堆 2G（DLL `6DA63C9C`、APK `F7FFEBA1`）。
 - 17:30 清单改为列表式，清理过时数字与文案。
 - 18:06 真机复测反馈（缩放生效但出现一堆虚拟屏）：定位到虚拟屏名字尾随 NUL 导致 DisplayConfig 匹配失败（自动缩放从未生效），并确认本机另有 UU/GameViewer IDD 残留 9 个已挂载幽灵屏；commit 后新增多余活动屏禁用逻辑，分辨率下发改用正确设备名。DLL `ABC99FC7` 已部署。
+- 19:02 按用户要求打分发用 Windows 测试包（便携 zip，32.5 MB），README-TEST.txt 内含 DLL 校验、运行方式与反馈要求。

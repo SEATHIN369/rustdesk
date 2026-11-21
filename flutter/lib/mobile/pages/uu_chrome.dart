@@ -47,6 +47,7 @@ class _UuChromeState extends State<UuChrome> {
   Timer? _privacyFailTimer;
   Timer? _mutePendingTimer;
   bool? _privacyPendingOn;
+  bool _privacyPreplugged = false;
   bool _mutePending = false;
   Worker? _privacyWorker;
   Worker? _railWorker;
@@ -101,21 +102,27 @@ class _UuChromeState extends State<UuChrome> {
   }
 
   // Physical screen-off is an explicit per-peer choice; the host restores
-  // the screen on every disconnect, so re-apply it on reconnect.
+  // the screen on every disconnect, so re-apply it on reconnect. Window
+  // display commits are rejected while the host sits at the lock screen, so
+  // keep retrying until the session is back and the intent still stands.
   void _restorePrivacyIntent() {
-    if (!_hostIntent('privacy')) return;
-    var attempts = 0;
+    var tries = 0;
     void attempt() {
-      if (!mounted) return;
+      if (!mounted || tries >= 20) return;
+      tries++;
+      if (!_hostIntent('privacy')) return;
       if (PrivacyModeState.find(widget.id).value.isNotEmpty) return;
+      if (_privacyPendingOn != null) {
+        Timer(const Duration(seconds: 2), attempt);
+        return;
+      }
       if (_privacySupported()) {
         _togglePrivacy(true, auto: true);
+        Timer(const Duration(seconds: 4), attempt);
         return;
       }
       // Peer info can arrive a few seconds after the page is built.
-      if (++attempts < 3) {
-        Timer(const Duration(seconds: 3), attempt);
-      }
+      Timer(const Duration(seconds: 3), attempt);
     }
 
     Future.delayed(const Duration(seconds: 3), attempt);
@@ -283,7 +290,8 @@ class _UuChromeState extends State<UuChrome> {
           sessionId: gFFI.sessionId, implKey: _kPrivacyVdImpl, on: true);
     }
 
-    if (preplug) {
+    if (preplug && !hadVirtualDisplay && !_privacyPreplugged) {
+      _privacyPreplugged = true;
       bind.sessionToggleVirtualDisplay(
           sessionId: gFFI.sessionId, index: 0, on: true);
       _privacyStartTimer = Timer(const Duration(seconds: 4), requestPrivacy);
@@ -296,15 +304,20 @@ class _UuChromeState extends State<UuChrome> {
         requestPrivacy();
       }
     });
-    _privacyFailTimer = Timer(const Duration(seconds: 20), () {
+    _privacyFailTimer = Timer(Duration(seconds: auto ? 8 : 20), () {
       if (!mounted || _privacyPendingOn != true) return;
       if (PrivacyModeState.find(widget.id).value.isEmpty) {
-        if (preplug && !hadVirtualDisplay) {
+        // An auto retry keeps the intent and tries again once the host is
+        // past its lock screen, so leave the virtual display plugged.
+        if (!auto && preplug && !hadVirtualDisplay) {
           bind.sessionToggleVirtualDisplay(
               sessionId: gFFI.sessionId, index: 0, on: false);
+          _privacyPreplugged = false;
         }
         setState(() => _privacyPendingOn = null);
-        showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
+        if (!auto) {
+          showToast('开启失败：被控端未找到虚拟显示器，驱动刚装好时请重启电脑再试');
+        }
       }
     });
   }

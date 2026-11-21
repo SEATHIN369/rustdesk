@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cwchar>
+#include <string.h>
 #include <intrin.h>
 #include <string>
 #include <memory>
@@ -403,25 +404,39 @@ extern "C"
         return TRUE;
     }
 
+    // 0 = not the Winlogon desktop, 1 = Winlogon without a LogonUI window
+    // (UAC secure desktop or a transition), 2 = lock screen, -1 = open failed.
+    // GetUserObjectInformation is the A variant here, so the buffer must stay
+    // char; a WCHAR buffer silently keeps the name from ever matching.
+    int
+    getInputDesktopLockState(char *name, int cap)
+    {
+        if (name != NULL && cap > 0)
+            name[0] = 0;
+        HDESK input = OpenInputDesktop(0, FALSE,
+                                       DESKTOP_READOBJECTS | DESKTOP_ENUMERATE | DESKTOP_SWITCHDESKTOP);
+        if (!input)
+            return -1;
+        char local[256];
+        DWORD size = 0;
+        BOOL got = GetUserObjectInformation(input, UOI_NAME, local, sizeof(local), &size);
+        if (name != NULL && cap > 0)
+            strncpy_s(name, cap, got ? local : "<unavailable>", _TRUNCATE);
+        int state = 0;
+        if (got && _stricmp(local, "Winlogon") == 0)
+        {
+            BOOL found = FALSE;
+            EnumDesktopWindows(input, findLogonUIWindow, reinterpret_cast<LPARAM>(&found));
+            state = found ? 2 : 1;
+        }
+        CloseDesktop(input);
+        return state;
+    }
+
     BOOL
     isInputDesktopLockScreen()
     {
-        HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_ENUMERATE);
-        if (!input)
-            return FALSE;
-        WCHAR name[256];
-        DWORD size = 0;
-        BOOL winlogon = GetUserObjectInformation(input, UOI_NAME, name, sizeof(name), &size) &&
-                        _wcsicmp(name, L"Winlogon") == 0;
-        if (!winlogon)
-        {
-            CloseDesktop(input);
-            return FALSE;
-        }
-        BOOL found = FALSE;
-        EnumDesktopWindows(input, findLogonUIWindow, reinterpret_cast<LPARAM>(&found));
-        CloseDesktop(input);
-        return found;
+        return getInputDesktopLockState(NULL, 0) == 2;
     }
 
     // The calling thread must already be attached to the input desktop; these
@@ -470,6 +485,19 @@ extern "C"
             SendInput(2, in, sizeof(INPUT));
             Sleep(8);
         }
+    }
+
+    // Tap a modifier with no text effect; the lock screen drops the first
+    // keystroke while dismissing its overlay, so wake it before typing.
+    void injectTapKey(int vk)
+    {
+        INPUT in[2];
+        ZeroMemory(in, sizeof(in));
+        in[0].type = INPUT_KEYBOARD;
+        in[0].ki.wVk = static_cast<WORD>(vk);
+        in[1] = in[0];
+        in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(2, in, sizeof(INPUT));
     }
 
     int handleMask(uint8_t *rwbuffer, const uint8_t *mask, int width, int height, int bmWidthBytes, int bmHeight)

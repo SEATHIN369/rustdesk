@@ -576,8 +576,10 @@ extern "C" {
     fn selectInputDesktop() -> BOOL;
     fn inputDesktopSelected() -> BOOL;
     fn isInputDesktopLockScreen() -> BOOL;
+    fn getInputDesktopLockState(name: *mut core::ffi::c_char, cap: i32) -> i32;
     fn injectUnicodeText(text: *const u16, len: i32) -> i32;
     fn injectEnterKey();
+    fn injectTapKey(vk: i32);
     fn injectBackspaceKey(count: i32);
     fn is_windows_server() -> BOOL;
     fn is_windows_10_or_greater() -> BOOL;
@@ -1059,6 +1061,20 @@ pub fn is_lock_screen_active() -> bool {
     unsafe { isInputDesktopLockScreen() == TRUE }
 }
 
+/// Lock screen state plus the input desktop name, for diagnostics.
+/// 0 = normal desktop, 1 = Winlogon without LogonUI (UAC etc.), 2 = lock
+/// screen, -1 = the input desktop could not be opened.
+pub fn lock_screen_state() -> (i32, String) {
+    let mut buf = [0i8; 128];
+    let state = unsafe {
+        getInputDesktopLockState(buf.as_mut_ptr() as *mut core::ffi::c_char, buf.len() as i32)
+    };
+    let name = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr() as *const core::ffi::c_char) }
+        .to_string_lossy()
+        .into_owned();
+    (state, name)
+}
+
 /// Attaches the calling thread to the input desktop, reporting success even
 /// when the thread was already there.
 pub fn ensure_input_desktop() -> bool {
@@ -1080,6 +1096,12 @@ pub fn inject_unicode_text(units: &[u16]) -> usize {
 
 pub fn inject_enter() {
     unsafe { injectEnterKey() }
+}
+
+/// Modifier tap with no text effect, used to wake the lock screen overlay.
+pub fn inject_wake_tap() {
+    const VK_SHIFT: i32 = 0x10;
+    unsafe { injectTapKey(VK_SHIFT) }
 }
 
 pub fn inject_backspaces(count: usize) {

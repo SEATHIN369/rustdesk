@@ -43,10 +43,20 @@ fn run(password: &str) -> String {
 
     const ATTEMPTS: u32 = 3;
     const UNLOCK_WAIT: Duration = Duration::from_secs(4);
+    // The client asks right after the first frame; the lock can land a moment
+    // later (or Winlogon can still be settling), so poll before giving up.
+    const LOCK_DETECT_WAIT: Duration = Duration::from_secs(12);
 
-    if !windows::is_lock_screen_active() {
-        return "skipped, not at the lock screen".into();
+    let mut state = windows::lock_screen_state();
+    let deadline = Instant::now() + LOCK_DETECT_WAIT;
+    while state.0 != 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+        state = windows::lock_screen_state();
     }
+    if state.0 != 2 {
+        return format!("skipped, state {} desktop {:?}", state.0, state.1);
+    }
+    log::info!("Auto unlock: lock screen detected, desktop {:?}", state.1);
     let mut units: Vec<u16> = password.encode_utf16().collect();
     let mut success: Option<String> = None;
     for attempt in 1..=ATTEMPTS {
@@ -65,6 +75,11 @@ fn run(password: &str) -> String {
             // A failed attempt may have left a partial password in the field.
             windows::inject_backspaces(units.len() + 16);
             std::thread::sleep(Duration::from_millis(200));
+        } else {
+            // The lock screen swallows the first keystroke while dismissing
+            // its overlay, so wake it with a harmless modifier tap.
+            windows::inject_wake_tap();
+            std::thread::sleep(Duration::from_millis(300));
         }
         let sent = windows::inject_unicode_text(&units);
         windows::inject_enter();

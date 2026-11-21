@@ -7,7 +7,6 @@ import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse.dart';
-import 'package:flutter_hbb/mobile/widgets/floating_mouse_widgets.dart';
 import 'package:flutter_hbb/mobile/widgets/gesture_help.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
@@ -570,6 +569,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void _hideIme() {
+    uuState.imeVisible.value = false;
     setState(() => _showEdit = false);
     gFFI.invokeMethod("enable_soft_keyboard", false);
     _mobileFocusNode.unfocus();
@@ -614,6 +614,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
         if (!isAndroid) _setImmersive(false);
         _mobileFocusNode.requestFocus();
+        // keyboard_visibility does not reliably report the Android IME
+        // showing, so track our own intent; the system callback corrects it.
+        uuState.imeVisible.value = true;
       });
     });
   }
@@ -700,18 +703,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                           ),
                                   ),
                                   const UuFloatingKeysOverlay(),
-                                  // Tapping outside the sheet equals Back, except while the system IME is
-// actually showing (stray taps must not dismiss it). The IME flag lives in
-// uuState because keyboard_visibility's value is not observable.
-                                  Obx(() => uuState.keyboardOpen.value &&
-                                          (uuState.keyboardTab.value != 0 ||
-                                              !uuState.imeVisible.value)
+                                  // Tapping outside behaves like UU: while the
+                                  // system IME is up the first tap only lowers
+                                  // it, the next tap closes the sheet.
+                                  Obx(() => uuState.keyboardOpen.value
                                       ? Positioned.fill(
                                           child: GestureDetector(
                                             behavior: HitTestBehavior.opaque,
                                             onTap: () {
-                                              uuState.keyboardOpen.value =
-                                                  false;
+                                              if (uuState.keyboardTab.value == 0 &&
+                                                  uuState.imeVisible.value) {
+                                                _hideIme();
+                                                return;
+                                              }
+                                              uuState.keyboardOpen.value = false;
                                               _hideIme();
                                             },
                                           ),
@@ -839,11 +844,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             paints.add(FloatingMouse(
               ffi: gFFI,
             ));
-          } else {
-            paints.add(FloatingMouseWidgets(
-              ffi: gFFI,
-            ));
           }
+          // The official floating mouse buttons (wheel + L/R pills) are
+          // replaced by UU's floating keys and our right-click gestures.
           return paints;
         }()));
   }

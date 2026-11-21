@@ -340,6 +340,26 @@ class _UuChromeState extends State<UuChrome> {
     }
   }
 
+  Future<void> _showQualityPicker() async {
+    if (!_imageQualityLoaded) await _loadImageQuality();
+    if (!mounted) return;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('画面质量'),
+        children: _imageQualityLabels.entries
+            .map((e) => SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop(e.key),
+                  child: Text(
+                      '${e.value}${_imageQuality == e.key ? '  ✓' : ''}'),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    _setImageQuality(picked);
+  }
+
   Widget _imageQualitySection() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
@@ -719,12 +739,10 @@ class _UuChromeState extends State<UuChrome> {
                 onTap: () => clientClose(gFFI.sessionId, gFFI),
               ),
               _actionTile(
-                icon: Icons.keyboard,
-                label: '键盘',
-                onTap: () {
-                  uuState.drawerPage.value = null;
-                  uuState.keyboardOpen.value = true;
-                },
+                icon: Icons.high_quality_outlined,
+                label: '画质',
+                tooltip: '调整远端画面质量',
+                onTap: _showQualityPicker,
               ),
               _actionTile(
                 icon: audioOn ? Icons.volume_up : Icons.volume_off,
@@ -815,23 +833,6 @@ class _UuChromeState extends State<UuChrome> {
           ),
         );
       },
-    );
-  }
-
-  Widget _virtualMouseRow() {
-    final vm = gFFI.ffiModel.virtualMouseMode;
-    return AnimatedBuilder(
-      animation: vm,
-      builder: (context, _) => SwitchListTile(
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-        secondary:
-            const Icon(Icons.mouse_outlined, color: Colors.white70, size: 20),
-        title: const Text('显示鼠标按键',
-            style: TextStyle(color: Colors.white, fontSize: 13)),
-        value: vm.showVirtualMouse,
-        onChanged: (_) => vm.toggleVirtualMouse(),
-      ),
     );
   }
 
@@ -953,7 +954,7 @@ class _UuChromeState extends State<UuChrome> {
           title: const Text('显示缩放',
               style: TextStyle(color: Colors.white, fontSize: 13)),
           subtitle: Text(
-              '当前 ${_hostSetting('scale', '125')}% · 下次开启关屏时生效（真正 DPI 缩放）',
+              '当前 ${_hostSetting('scale', '125')}% · 开启关屏后生效，关屏期间调整立即应用',
               style: const TextStyle(color: Colors.white38, fontSize: 11)),
           trailing:
               const Icon(Icons.chevron_right, color: Colors.white54, size: 18),
@@ -1062,7 +1063,6 @@ class _UuChromeState extends State<UuChrome> {
     final operationRows = <Widget>[
       if (_keyboardMapSupported) _keyboardMapRow(),
       if (!gFFI.ffiModel.isPeerAndroid) _touchPointerRow(),
-      if (!gFFI.ffiModel.isPeerAndroid) _virtualMouseRow(),
     ];
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),

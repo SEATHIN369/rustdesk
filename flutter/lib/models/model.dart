@@ -964,9 +964,29 @@ class FfiModel with ChangeNotifier {
     } else if (text == kMsgboxTextWaitingForImage) {
       showConnectedWaitingForImage(dialogManager, sessionId, type, title, text);
     } else if (title == 'Privacy mode') {
-      final hasRetry = evt['hasRetry'] == 'true';
-      showPrivacyFailedDialog(
-          sessionId, type, title, text, link, hasRetry, dialogManager);
+      // Success announcements ("Enter/Exit privacy mode") are pure noise: the
+      // privacy tile already reflects the state. Failures become a toast —
+      // the host retries display commits internally and our toggle flow has
+      // its own pending UI, so a modal only gets in the way.
+      final t = text is String ? text : '';
+      if (type == 'custom-nocancel' ||
+          t == 'Enter privacy mode' ||
+          t == 'Exit privacy mode') {
+        return;
+      }
+      final friendly = t.isEmpty || t == 'Failed' || t.startsWith('Failed ')
+          ? '隐私模式操作失败，请稍后重试'
+          : t == 'Unsupported'
+              ? '被控端不支持隐私模式'
+              : t == 'Peer denied'
+                  ? '被控端拒绝开启隐私模式'
+                  : t == 'Peer exit'
+                      ? '对端已退出隐私模式'
+                      : t == 'Turned off'
+                          ? '隐私模式已关闭'
+                          : '隐私模式出错，请重试';
+      showToast(friendly);
+      return;
     } else {
       var hasRetry = evt['hasRetry'] == 'true';
       if (!hasRetry) {
@@ -1205,22 +1225,6 @@ class FfiModel with ChangeNotifier {
       }
     });
     bind.sessionOnWaitingForImageDialogShow(sessionId: sessionId);
-  }
-
-  void showPrivacyFailedDialog(
-      SessionID sessionId,
-      String type,
-      String title,
-      String text,
-      String link,
-      bool hasRetry,
-      OverlayDialogManager dialogManager) {
-    // There are display changes on the remote side,
-    // which will cause some messages to refresh the canvas and dismiss dialogs.
-    // So we add a delay here to ensure the dialog is displayed.
-    Future.delayed(Duration(milliseconds: 3000), () {
-      showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager);
-    });
   }
 
   _updateSessionWidthHeight(SessionID sessionId) {

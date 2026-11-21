@@ -2250,9 +2250,31 @@ fn legacy_keyboard_mode(evt: &KeyEvent) {
     release_keys(&mut en, &to_release);
 }
 
+// Character classes only: enough to tell U+0020 from U+3000 without putting
+// typed text (often a password) into the log.
 #[cfg(target_os = "windows")]
-fn translate_process_code(code: u32, down: bool) {
-    crate::platform::windows::try_change_desktop();
+fn log_seq_input_profile(seq: &str) {
+    let chars: Vec<char> = seq.chars().collect();
+    if chars.len() > 128 {
+        log::info!("Seq input: len={}", chars.len());
+        return;
+    }
+    let ascii = chars
+        .iter()
+        .filter(|c| (0x21..=0x7E).contains(&(**c as u32)))
+        .count();
+    let space = chars.iter().filter(|c| **c == ' ').count();
+    let cjk_space = chars.iter().filter(|c| **c == '\u{3000}').count();
+    let tab = chars.iter().filter(|c| **c == '\t').count();
+    let other = chars.len() - ascii - space - cjk_space - tab;
+    log::info!(
+        "Seq input: len={} ascii={ascii} space={space} u3000={cjk_space} tab={tab} other={other}",
+        chars.len()
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn translate_process_code(code: u32, down: bool) {    crate::platform::windows::try_change_desktop();
     match code >> 16 {
         0 => sim_rdev_rawkey_position(code as _, down),
         vk_code => sim_rdev_rawkey_virtual(vk_code, down),
@@ -2319,6 +2341,12 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
             // remote: Shift + 1 => 1
             let mut en = ENIGO.lock().unwrap();
 
+            // Text input must reach the input desktop too: at the lock screen
+            // the Enter key (Chr path) already switched, but password text
+            // went to the user desktop and was lost.
+            #[cfg(target_os = "windows")]
+            crate::platform::windows::try_change_desktop();
+
             #[cfg(target_os = "macos")]
             en.key_sequence(seq);
             #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -2340,6 +2368,8 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
                         }
                     }
                 }
+                #[cfg(target_os = "windows")]
+                log_seq_input_profile(&seq);
                 for chr in seq.chars() {
                     // char in rust is 4 bytes.
                     // But for this case, char comes from keyboard. We only need 2 bytes.
@@ -2347,7 +2377,12 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
                     if simulate_win_hot_key {
                         rdev::simulate_char(chr, true).ok();
                     } else {
-                        rdev::simulate_unicode(chr as _).ok();
+                        if let Err(e) = rdev::simulate_unicode(chr as _) {
+                            log::warn!(
+                                "Seq input: unicode injection failed at U+{:04X}: {e}",
+                                chr as u32
+                            );
+                        }
                     }
                     #[cfg(target_os = "linux")]
                     en.key_click(Key::Layout(chr));

@@ -148,165 +148,242 @@ fn system_is_muted() -> Option<bool> {
     }
 }
 
+/// Per-monitor scaling through the same undocumented DisplayConfig device info
+/// types the Settings app uses (`-3` get / `-4` set, relative to the scale
+/// Windows recommends for the monitor).
 #[cfg(windows)]
-fn active_user_sid() -> Option<String> {
-    use windows::Win32::Foundation::{CloseHandle, HLOCAL, HANDLE};
-    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER};
-    use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
-    unsafe {
-        let session = WTSGetActiveConsoleSessionId();
-        if session == u32::MAX {
-            return None;
+mod dpi_scale {
+    use windows::Win32::Devices::Display::{
+        DisplayConfigGetDeviceInfo, DisplayConfigSetDeviceInfo, GetDisplayConfigBufferSizes,
+        QueryDisplayConfig, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+        DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_DEVICE_INFO_TYPE, DISPLAYCONFIG_MODE_INFO,
+        DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TOPOLOGY_ID,
+        QDC_ONLY_ACTIVE_PATHS,
+    };
+    use windows::Win32::Foundation::{LUID, ERROR_SUCCESS};
+
+    const DPI_VALUES: [u32; 12] = [100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500];
+    const GET_SOURCE_DPI_SCALE: DISPLAYCONFIG_DEVICE_INFO_TYPE =
+        DISPLAYCONFIG_DEVICE_INFO_TYPE(-3);
+    const SET_SOURCE_DPI_SCALE: DISPLAYCONFIG_DEVICE_INFO_TYPE =
+        DISPLAYCONFIG_DEVICE_INFO_TYPE(-4);
+
+    #[repr(C)]
+    struct SourceDpiScaleGet {
+        header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+        min_scale_rel: i32,
+        cur_scale_rel: i32,
+        max_scale_rel: i32,
+    }
+
+    #[repr(C)]
+    struct SourceDpiScaleSet {
+        header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+        scale_rel: i32,
+    }
+
+    fn header(
+        ty: DISPLAYCONFIG_DEVICE_INFO_TYPE,
+        size: usize,
+        adapter: LUID,
+        id: u32,
+    ) -> DISPLAYCONFIG_DEVICE_INFO_HEADER {
+        DISPLAYCONFIG_DEVICE_INFO_HEADER {
+            r#type: ty,
+            size: size as u32,
+            adapterId: adapter,
+            id,
         }
-        let mut token = HANDLE::default();
-        if WTSQueryUserToken(session, &mut token).is_err() {
-            return None;
-        }
-        let sid = (|| {
-            let mut len = 0u32;
-            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
-            if len == 0 {
+    }
+
+    fn active_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
+        unsafe {
+            let mut npaths = 0u32;
+            let mut nmodes = 0u32;
+            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut npaths, &mut nmodes)
+                != ERROR_SUCCESS
+                || npaths == 0
+            {
                 return None;
             }
-            // u64 words keep the buffer 8-byte aligned for TOKEN_USER.
-            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-            GetTokenInformation(
-                token,
-                TokenUser,
-                Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
-                (buf.len() * 8) as u32,
-                &mut len,
-            )
-            .ok()?;
-            let user = &*(buf.as_ptr() as *const TOKEN_USER);
-            let mut pwstr = windows::core::PWSTR::null();
-            ConvertSidToStringSidW(user.User.Sid, &mut pwstr).ok()?;
-            let s = pwstr.to_string().ok();
-            let _ = windows::Win32::Foundation::LocalFree(Some(HLOCAL(pwstr.0 as *mut core::ffi::c_void)));
-            s
-        })();
-        let _ = CloseHandle(token);
-        sid
+            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); npaths as usize];
+            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nmodes as usize];
+            if QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut npaths,
+                paths.as_mut_ptr(),
+                &mut nmodes,
+                modes.as_mut_ptr(),
+                None::<*mut DISPLAYCONFIG_TOPOLOGY_ID>,
+            ) != ERROR_SUCCESS
+            {
+                return None;
+            }
+            paths.truncate(npaths as usize);
+            Some(paths)
+        }
     }
-}
 
-/// Writes the DPI value of every known Amyuni virtual-monitor entry in the
-/// active user's hive. Windows re-reads these on monitor hotplug, which is
-/// exactly when privacy mode plugs the virtual display in.
-#[cfg(windows)]
-fn write_per_monitor_dpi(scale: u32) -> usize {
-    use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_USERS, KEY_READ,
-        KEY_WOW64_64KEY, KEY_WRITE, REG_DWORD,
-    };
-    let Some(sid) = active_user_sid() else {
-        hbb_common::log::warn!("No active console user; DPI scale not applied");
-        return 0;
-    };
-    let index: u32 = match scale {
-        125 => 1,
-        150 => 2,
-        175 => 3,
-        200 => 4,
-        _ => 0,
-    };
-    let mut count = 0usize;
-    unsafe {
-        let sub = format!("{sid}\\Control Panel\\Desktop\\PerMonitorSettings");
-        let sub_w: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut root = HKEY::default();
-        let rc = RegOpenKeyExW(
-            HKEY_USERS,
-            PCWSTR(sub_w.as_ptr()),
-            Some(0),
-            KEY_READ | KEY_WRITE | KEY_WOW64_64KEY,
-            &mut root,
-        );
-        if !rc.is_ok() {
-            hbb_common::log::warn!("Open PerMonitorSettings failed: {:?}", rc);
-            return 0;
-        }
-        let mut i = 0u32;
-        loop {
-            let mut name = [0u16; 256];
-            let mut len = name.len() as u32;
-            let rc = RegEnumKeyExW(
-                root,
-                i,
-                Some(PWSTR(name.as_mut_ptr())),
-                &mut len,
-                None,
-                None,
-                None,
-                None,
+    fn find_source(device: &str) -> Option<(LUID, u32)> {
+        for path in active_paths()? {
+            let mut name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+            name.header = header(
+                DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>(),
+                path.sourceInfo.adapterId,
+                path.sourceInfo.id,
             );
-            if !rc.is_ok() {
-                break;
-            }
-            i += 1;
-            let key_name = String::from_utf16_lossy(&name[..len as usize]);
-            // The Amyuni USB virtual monitor exposes no EDID (vendor 0x1414),
-            // so Windows names its per-monitor key NOEDID_1414_008B_*.
-            if !key_name.starts_with("NOEDID_1414_") {
+            if unsafe { DisplayConfigGetDeviceInfo(&mut name.header) } != 0 {
                 continue;
             }
-            let kn: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
-            let mut subkey = HKEY::default();
-            let rc = RegOpenKeyExW(
-                root,
-                PCWSTR(kn.as_ptr()),
-                Some(0),
-                KEY_WRITE | KEY_WOW64_64KEY,
-                &mut subkey,
-            );
-            if !rc.is_ok() {
-                continue;
-            }
-            let data = index.to_le_bytes();
-            let rc = RegSetValueExW(
-                subkey,
-                windows::core::w!("DpiValue"),
-                None,
-                REG_DWORD,
-                Some(&data),
-            );
-            let _ = RegCloseKey(subkey);
-            if rc.is_ok() {
-                count += 1;
-                hbb_common::log::info!("DPI scale {scale}% written to {key_name}");
-            } else {
-                hbb_common::log::warn!("Failed to write DpiValue for {key_name}: {:?}", rc);
+            let len = name
+                .viewGdiDeviceName
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(name.viewGdiDeviceName.len());
+            let gdi = String::from_utf16_lossy(&name.viewGdiDeviceName[..len]);
+            if gdi.eq_ignore_ascii_case(device) {
+                return Some((path.sourceInfo.adapterId, path.sourceInfo.id));
             }
         }
-        let _ = RegCloseKey(root);
+        None
     }
-    count
+
+    fn get_source_scale(adapter: LUID, id: u32) -> Option<SourceDpiScaleGet> {
+        let mut req = SourceDpiScaleGet {
+            header: header(
+                GET_SOURCE_DPI_SCALE,
+                std::mem::size_of::<SourceDpiScaleGet>(),
+                adapter,
+                id,
+            ),
+            min_scale_rel: 0,
+            cur_scale_rel: 0,
+            max_scale_rel: 0,
+        };
+        match unsafe { DisplayConfigGetDeviceInfo(&mut req.header) } {
+            0 => Some(req),
+            _ => None,
+        }
+    }
+
+    fn recommended_index(min_scale_rel: i32) -> Option<i32> {
+        let idx = -min_scale_rel;
+        (0..DPI_VALUES.len() as i32).contains(&idx).then_some(idx)
+    }
+
+    /// Returns (current percent, recommended percent) for an active display.
+    pub fn get(device: &str) -> Option<(u32, u32)> {
+        let (adapter, id) = find_source(device)?;
+        let info = get_source_scale(adapter, id)?;
+        let rec = recommended_index(info.min_scale_rel)?;
+        let cur = rec + info.cur_scale_rel;
+        Some((*DPI_VALUES.get(cur as usize)?, DPI_VALUES[rec as usize]))
+    }
+
+    pub fn set(device: &str, percent: u32) -> Result<(), String> {
+        let (adapter, id) =
+            find_source(device).ok_or_else(|| format!("{device} is not an active display"))?;
+        let info = get_source_scale(adapter, id).ok_or("DPI scale query failed")?;
+        let rec = recommended_index(info.min_scale_rel).ok_or("unexpected recommended scale")?;
+        let target = DPI_VALUES
+            .iter()
+            .position(|&p| p == percent)
+            .ok_or_else(|| format!("unsupported scale {percent}%"))? as i32;
+        let rel = (target - rec).clamp(info.min_scale_rel, info.max_scale_rel);
+        let set = SourceDpiScaleSet {
+            header: header(
+                SET_SOURCE_DPI_SCALE,
+                std::mem::size_of::<SourceDpiScaleSet>(),
+                adapter,
+                id,
+            ),
+            scale_rel: rel,
+        };
+        match unsafe { DisplayConfigSetDeviceInfo(&set.header) } {
+            0 => Ok(()),
+            rc => Err(format!("DisplayConfigSetDeviceInfo failed, rc={rc}")),
+        }
+    }
 }
 
 #[cfg(not(windows))]
-fn write_per_monitor_dpi(_scale: u32) -> usize {
-    0
+mod dpi_scale {
+    pub fn get(_device: &str) -> Option<(u32, u32)> {
+        None
+    }
+
+    pub fn set(_device: &str, _percent: u32) -> Result<(), String> {
+        Err("unsupported platform".into())
+    }
 }
 
-/// Re-applies the persisted DPI scale (idempotent, cheap).
-pub fn apply_dpi_scale_to_active_user() {
-    let scale = STATE.lock().unwrap().dpi_scale;
-    let count = write_per_monitor_dpi(scale);
-    if count > 0 {
-        hbb_common::log::info!("Virtual display DPI scale {scale}% applied");
+lazy_static::lazy_static! {
+    /// GDI name of the virtual display currently used by privacy mode.
+    static ref PRIVACY_DISPLAY: Mutex<Option<String>> = Mutex::new(None);
+}
+
+/// Called once privacy mode committed its display layout. A fresh virtual
+/// display comes up at Windows' recommended scale, where the user's stored
+/// choice is applied; a scale the user picked in Settings is kept and mirrored
+/// into our own state.
+pub fn on_privacy_display_ready(device: &str) {
+    *PRIVACY_DISPLAY.lock().unwrap() = Some(device.to_owned());
+    let stored = STATE.lock().unwrap().dpi_scale;
+    let mut info = None;
+    for _ in 0..10 {
+        if let Some(v) = dpi_scale::get(device) {
+            info = Some(v);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
+    let Some((cur, recommended)) = info else {
+        hbb_common::log::warn!("Virtual display {device} not found; DPI scale not applied");
+        return;
+    };
+    if cur == recommended {
+        if stored == cur {
+            hbb_common::log::info!("Virtual display DPI already at {cur}%");
+        } else if let Err(e) = dpi_scale::set(device, stored) {
+            hbb_common::log::error!("Failed to set virtual display DPI {stored}%: {e}");
+        } else {
+            hbb_common::log::info!("Virtual display DPI set to {stored}% (was {cur}%)");
+        }
+    } else {
+        with_state(|s| s.dpi_scale = cur);
+        hbb_common::log::info!(
+            "Virtual display DPI kept at Windows setting {cur}% (recommended {recommended}%)"
+        );
+    }
+}
+
+pub fn on_privacy_display_gone() {
+    // Keep whatever scale the user picked in Windows Settings while the
+    // virtual display was up; the next session starts from it.
+    let device = PRIVACY_DISPLAY.lock().unwrap().clone();
+    if let Some(device) = device.as_deref() {
+        if let Some((cur, _)) = dpi_scale::get(device) {
+            with_state(|s| s.dpi_scale = cur);
+        }
+    }
+    *PRIVACY_DISPLAY.lock().unwrap() = None;
 }
 
 pub fn set_dpi_scale(scale: u32) {
     let scale = match scale {
-        125 | 150 | 175 | 200 => scale,
+        100 | 125 | 150 | 175 | 200 => scale,
         _ => 100,
     };
     with_state(|s| s.dpi_scale = scale);
     hbb_common::log::info!("Host DPI scale set to {scale}");
-    apply_dpi_scale_to_active_user();
+    let device = PRIVACY_DISPLAY.lock().unwrap().clone();
+    if let Some(device) = device {
+        match dpi_scale::set(&device, scale) {
+            Ok(()) => hbb_common::log::info!("Virtual display DPI applied live: {scale}%"),
+            Err(e) => hbb_common::log::warn!("Failed to apply DPI {scale}% live: {e}"),
+        }
+    }
 }
 
 /// Applies the persisted mute state when the host server starts.
@@ -321,7 +398,6 @@ pub fn init() {
             hbb_common::log::error!("Failed to re-apply host mute: {e}");
         }
     }
-    apply_dpi_scale_to_active_user();
 }
 
 pub fn set_mute(mute: bool) {

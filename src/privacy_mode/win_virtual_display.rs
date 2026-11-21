@@ -496,9 +496,8 @@ impl PrivacyMode for PrivacyModeImpl {
             succeeded: false,
         };
 
-        // Windows applies per-monitor DPI when a monitor is hotplugged, so make
-        // sure the virtual display's scaling entry is in place before plugging.
-        crate::host_controls::apply_dpi_scale_to_active_user();
+        // Windows applies per-monitor DPI when a monitor is hotplugged; the
+        // scale itself is set after the display is committed below.
         guard.ensure_virtual_display(is_async_mode)?;
         if guard.virtual_displays.is_empty() {
             log::debug!("No virtual displays");
@@ -506,9 +505,38 @@ impl PrivacyMode for PrivacyModeImpl {
         }
 
         let reg_connectivity_1 = reg_display_settings::read_reg_connectivity()?;
-        let primary_display_name = guard.set_primary_display()?;
-        guard.disable_physical_displays()?;
-        Self::commit_change_display(CDS_RESET)?;
+        // The virtual display attaching (Amyuni, async) can make the commit
+        // fail once with `ret: -1` and no system error; retry inside the host
+        // instead of leaving the client to retry and show a failure dialog.
+        let mut primary_display_name = String::new();
+        let mut last_err = String::new();
+        for attempt in 0..4 {
+            let res = (|| -> ResultType<String> {
+                let name = guard.set_primary_display()?;
+                guard.disable_physical_displays()?;
+                Self::commit_change_display(CDS_RESET)?;
+                Ok(name)
+            })();
+            match res {
+                Ok(name) => {
+                    primary_display_name = name;
+                    last_err.clear();
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    log::warn!(
+                        "Privacy mode display commit attempt {} failed: {}",
+                        attempt + 1,
+                        last_err
+                    );
+                    thread::sleep(Duration::from_millis(700));
+                }
+            }
+        }
+        if !last_err.is_empty() {
+            bail!("Failed ChangeDisplaySettingsEx, {}", last_err);
+        }
         // Explicitly set the resolution(virtual display) to the size chosen by the client.
         let (width, height) = desired_mode();
         allow_err!(crate::platform::change_resolution(
@@ -534,6 +562,7 @@ impl PrivacyMode for PrivacyModeImpl {
         guard.succeeded = true;
 
         allow_err!(super::win_input::hook());
+        crate::host_controls::on_privacy_display_ready(&primary_display_name);
 
         Ok(true)
     }
@@ -545,6 +574,7 @@ impl PrivacyMode for PrivacyModeImpl {
     ) -> ResultType<()> {
         self.check_off_conn_id(conn_id)?;
         super::win_input::unhook()?;
+        crate::host_controls::on_privacy_display_gone();
         let _tmp_ignore_changed_holder = crate::display_service::temp_ignore_displays_changed();
         self.restore();
         // We need to force restore the registry connectivity.

@@ -144,19 +144,77 @@ flutter build apk --release --target-platform android-arm64
 - 积分器保留小数（现有 `_mouseScrollIntegral`），松手清零；参数提成 const 便于真机微调。
 - 验收：galgame 快进连点与浏览器长页面各试一次，慢速能停在指定行，快速甩动不丢步。
 
-### 8.3 操作页 IA 重构
+### 8.3 操作页 IA 重构（按 UU 实机面板重设计，2026-11-21 补）
 
-现状：一级菜单平铺「操控方案 / 其他设置 / 会话设置 / 更多操作 / 手势与触摸模式 / 断开」，而手势开关藏在「其他设置」，与「手势与触摸模式」帮助项割裂。
+参照素材：UU 操作面板截屏（右缘 rail「操作/键盘/显示桌面/显示所有窗口」，点「操作」后的全高面板）。
+现状问题：一级菜单平铺「操控方案 / 其他设置 / 会话设置 / 更多操作 / 手势与触摸模式 / 断开」，
+手势开关藏在「其他设置」，与「手势与触摸模式」帮助项割裂；且 UU 顶部动作条、分组卡片结构完全没复刻。
 
-目标一级结构：
+**面板结构（自上而下，全高可滚动；右缘 rail 不变，仅「操作」高亮）**
 
-1. **本机操控** → 手势与触摸（滚动灵敏度、双指缩放开关、手势说明）、按键放大、点击震动
-2. **虚拟按键** → 操控方案（现 schemes 页）、键位编辑
-3. **显示与画质** → 画质/缩放/吸附（能接的接，接不上的隐藏）
-4. **被控端** → 声音串流（原名「静音」，语义见第 6 节）、退出锁屏、物理关屏、自动解锁
-5. **更多操作** / **断开连接**（红色）
+#### A. 顶部动作条：5 个等宽方块（icon 28~32 + 11px 标签，间距 8）
 
-原则：同一概念只出现一处；只搬位置，不改默认值。
+| # | 按钮 | 激活态 | 1.5.3 接线 |
+|---|---|---|---|
+| 1 | 退出远控 | — | `clientClose(gFFI.sessionId, gFFI)` |
+| 2 | 旋转屏幕 | 蓝=已旋转 | **无远端接口**：RustDesk 1.5.3 没有旋转被控端显示的 API；一期置灰/隐藏并说明「Windows 被控端暂不支持」 |
+| 3 | 声音 | 蓝=正在串流声音 | `optionOn('disable-audio')` 取反显示；点击 `sessionToggleOption('disable-audio')`（语义见第 6 节：只影响串流） |
+| 4 | 仅观看 | 蓝=开启 | `sessionToggleOption(kOptionToggleViewOnly)` + `gFFI.ffiModel.setViewOnly(id, v)`；读取 `ffiModel.viewOnly` |
+| 5 | 小窗模式 | 蓝=画中画中 | **二期**：Android PiP。manifest 给 MainActivity 加 `supportsPictureInPicture`，MethodChannel 调 `enterPictureInPictureMode()`（API≥26，minSdk 22 需版本守卫），退出时 `setPictureInPictureParams` 可省 |
+
+#### B.「操作」区（小标题 + 一张卡片，3 行）
+
+- **启用按键映射**（A 图标 + Switch）：`sessionGetKeyboardMode(id)` 是否为 `'map'`；切换用
+  `sessionSetKeyboardMode(id, value: 'map' | 'legacy')`（注释掉的 `changePhysicalKeyboardInputMode` 就是现成实现，见 remote_page.dart ~1032）。
+- **屏幕触控 ｜ 鼠标指针**（分段控件，选中项蓝底白字）：`gFFI.ffiModel.toggleTouchMode()` +
+  `mainSetLocalOption(kOptionTouchMode, touchMode ? 'Y' : 'N')`（remote_page getGestureHelp 现成写法）。
+- **显示鼠标按键**（鼠标图标 + Switch）：`gFFI.ffiModel.virtualMouseMode.toggleVirtualMouse()`，
+  本地选项 `show-virtual-mouse` 持久化；打开后画布叠加左/中/右键浮动按钮。
+
+#### C. 折叠分组卡片（每张：图标 + 标题 + `›`，展开后是现有 row；卡片之间 12px）
+
+1. **显示**（monitor 图标）
+   - 画面缩放：吸附开关（fit/1:1 松手吸附）
+   - 显示远端光标：`show-remote-cursor`（`ShowRemoteCursorState`）
+   - 画质档位：能接就接，接不上的隐藏，不放假开关
+2. **安全**（盾牌图标）
+   - 操控时物理关屏（虚拟屏防窥）：现有 switch + pending/预插逻辑整体搬入（不要复制代码，抽成 widget）
+   - 退出远控时锁定电脑：`lock-after-session-end`
+   - 自动解锁（Windows 锁屏）：现有密码配置整体搬入
+3. **外设**（USB 图标）
+   - 虚拟按键方案：现 `schemes` 页入口（点开进二级页）
+   - 按键放大：滑条
+   - 点击按键时震动：switch
+   - 手势与触摸：二级页（手势说明 + 双指缩放开关 + 8.2 的滚动灵敏度滑条）
+4. **更多**（more 图标）
+   - 会话设置：上游 `showOptions(context, id, gFFI.dialogManager)`
+   - 更多操作：`widget.onShowActions()`
+   - 文件传输/录制等：有就接，没有不摆
+
+原则：同一概念只出现一处（声音只在顶部按钮，不再在分组里出现）；只搬位置，不改默认值。
+
+**Widget 骨架（供实现参考）**
+
+```dart
+ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 16), children: [
+  SizedBox(height: 96, child: Row(children: [for (final a in actions) Expanded(child: _actionTile(a))])),
+  const SizedBox(height: 20),
+  _sectionLabel('操作'),
+  _card(Column(children: [_mapModeRow(), _touchPointerSegmented(), _virtualMouseRow()])),
+  const SizedBox(height: 12),
+  _groupCard('显示', '显示', children: [...]),
+  _groupCard('安全', '安全', children: [...]),
+  _groupCard('外设', '外设', children: [...]),
+  _groupCard('更多', '更多', children: [...]),
+])
+```
+- 卡片：`Color(0xFF2F2F31)` / 圆角 14 / 内边距上下 4；激活色沿用 `MyTheme.accent`（蓝）。
+- 折叠组用 `AnimatedSize` + 本地 `Set<String> _expanded`（默认全收起，和 UU 一致）。
+- 现有 `_toggleRow` / `_sliderRow` 保留复用，`_menuPage` 旧 ListTile 列表整体删除。
+
+**分期**：P0 = 纯 UI 重排 + 已有功能接线（A1/A3/A4 + B 三行 + C 四组）；
+P1 = 小窗模式 PiP；P2 = 旋转屏幕（需用户拍板：客户端画布旋转 or 直接不做）。
+手势引擎（8.1/8.2）独立分支先合，灵敏度滑条挂在 C3「手势与触摸」二级页。
 
 ## 9. 真机测试清单（每版过一遍）
 
@@ -166,7 +224,7 @@ flutter build apk --release --target-platform android-arm64
 4. 键盘面板：tab 切换、唤 IME 立即弹出、IME 开着时点外不退出、IME 收起后点外可返回。
 5. 悬浮键：点击有按压反馈/震动；按住 Ctrl 快进（galgame）；拖动可移位并持久化。
 6. 右缘：四块区域整块可点；点外收起；闲置 4s 淡出。
-7. 设置页：声音串流 / 退出锁屏 / 自动解锁 / 防窥开关逐一生效；防窥点击瞬间有转圈，先预插虚拟屏、约 4s 后开启，失败会回滚并提示。
+7. 操作面板：顶部动作条「退出远控/声音/仅观看」状态色正确；按键映射、屏幕触控/鼠标指针、显示鼠标按键生效；防窥、退出锁屏、自动解锁、虚拟按键方案都在对应分组里且逐一生效；防窥点击瞬间有转圈，先预插虚拟屏、约 4s 后开启，失败会回滚并提示。
 8. 退出会话后：被控端物理屏恢复、声音恢复、未勾选时不锁屏。
 
 ## 10. 已知问题

@@ -77,7 +77,8 @@ flutter build apk --release --target-platform android-arm64
 ## 6. 关键机制备忘
 
 - **会话选项**：`sessionToggleOption` 发 Misc.option 立即生效（`lock-after-session-end` 退出锁屏）。
-  `disable-audio` 只是被控端**不再向客户端发音频帧**，不会关电脑扬声器；1.5.3 协议没有主机静音接口。
+  `disable-audio` 只是被控端**不再向客户端发音频帧**，不会关电脑扬声器；1.5.3 协议没有主机静音接口
+  （取证与方案见 `docs/host-mute-helper.md`：主机侧热键助手 + 手机发 Ctrl+Alt+Shift+F9/F10）。
 - **防窥必须走专用接口**：`bind.sessionTogglePrivacyMode(sessionId, implKey, on)`，
   `implKey = 'privacy_mode_impl_virtual_display'`（来自 `pi.platformAdditions['supported_privacy_mode_impl']` 列表）。
   不要用通用 `toggleOption('privacy-mode')`——只发 option 不翻服务端 config。

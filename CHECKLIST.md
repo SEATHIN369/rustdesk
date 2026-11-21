@@ -7,7 +7,7 @@
 
 ## 工件与环境
 
-- 分支：`local/1.5.3-android`，已推 fork（github.com/kitsuneMori96/rustdesk）
+- 分支：`local/1.5.3-android` @ `490994e6d`，已推 fork（github.com/kitsuneMori96/rustdesk）
 - 主机 DLL：36,243,968 B，SHA256 `F3B1859C…103E`，已部署到 `D:\soft\apps\RustDesk`（21:40 起服务运行，`--server` 在会话 0）
 - 手机 APK：`D:\Download\共享文件夹\rustdesk-uu-android-arm64-2026-11-21-2148.apk`，29,287,646 B，SHA256 `714F62E9…0F3E`
 - 协作者包：`D:\Download\共享文件夹\rustdesk-host-win64-selfbuild-2026-11-21.zip`，14,621,253 B（18:07 打包）；补丁 8 个文件，已验证能打在 tag 1.5.3 上

@@ -76,16 +76,21 @@ flutter build apk --release --target-platform android-arm64
 
 ## 6. 关键机制备忘
 
-- **会话选项**：`sessionToggleOption` 发 Misc.option 立即生效（`disable-audio` 静音、`lock-after-session-end` 退出锁屏）。
+- **会话选项**：`sessionToggleOption` 发 Misc.option 立即生效（`lock-after-session-end` 退出锁屏）。
+  `disable-audio` 只是被控端**不再向客户端发音频帧**，不会关电脑扬声器；1.5.3 协议没有主机静音接口。
 - **防窥必须走专用接口**：`bind.sessionTogglePrivacyMode(sessionId, implKey, on)`，
   `implKey = 'privacy_mode_impl_virtual_display'`（来自 `pi.platformAdditions['supported_privacy_mode_impl']` 列表）。
   不要用通用 `toggleOption('privacy-mode')`——只发 option 不翻服务端 config。
 - **虚拟屏防窥 = 物理关屏**：被控端（Windows 安装版官方 RustDesk 1.5.3 + 服务运行，Win10 19041+）
   用 `ChangeDisplaySettingsExW` 拔掉物理屏、串流切到虚拟屏。Windows 版实现的 IDD 是 **Amyuni usbmmidd**，
   设备名 “USB Mobile Monitor Virtual Display”；**不存在 “RustDeskIddDriver Device”**（那是另一种 impl）。
-  首次开启时驱动经 SetupAPI 现场安装，有 8–45s 的枚举竞态 → 客户端做了 4s 自动重试 + 点击即时 pending UI。
+  服务端 `turn_on` 只等虚拟屏 5s，而 Amyuni 插入后要约 6s 才 ACTIVE，直接开防窥会报
+  “No virtual displays”。客户端流程：先 `sessionToggleVirtualDisplay(index: 0, on: true)` 预插 →
+  4s 后发防窥 on → 12s 无变化重发 → 20s 仍失败则回滚预插并提示。开防窥时 `restore()` 会拔掉全部虚拟屏，
+  关防窥即恢复物理屏，不需要再手动减屏。
 - **自动解锁**：无原生接口，Dart 实现。密码存 local option `uu-auto-unlock:<peerId>`（JSON `{on,pwd}`），
-  首帧后 2s 逐字符 `inputKey(ch)` + `VK_RETURN`，每个会话一次。**只在电脑锁屏时打开**，否则密码会打进焦点窗口。
+  首帧后 2s 一次性 `sessionInputString(pwd)`（Seq 通道，锁屏唯一可靠路径；逐字符 `inputKey` 走 Chr 通道，
+  锁屏收不到），400ms 后 `VK_RETURN`，每个会话一次。**只在电脑锁屏时打开**，否则密码会打进焦点窗口。
 - **键盘输入**：单字符键名走 raw char；Win 键在 `inputKey` 里叫 `Meta`；`inputKey(name, down:, press:)` 控制按住。
 - **横屏**：默认 `[landscapeLeft, landscapeRight]` 在部分 ROM（关自动旋转时）被钉死；
   现用 `sensors_plus` 读加速度计，持握 |x|≥6 且 |y|≤6 时按 x 符号显式请求单方向横屏（450ms 防抖）。
@@ -101,7 +106,59 @@ flutter build apk --release --target-platform android-arm64
 - 不把测试脚本、日志、构建副本提交进仓库；临时产物放系统临时目录。
 - 不要把本机敏感信息（IP、密码、Peer ID、密钥）写进代码或文档。
 
-## 8. 真机测试清单（每版过一遍）
+## 8. 当前迭代任务分工（2026-11-21）
+
+| 归属 | 任务 | 涉及文件 | 状态 |
+|---|---|---|---|
+| A（kitsuneMori96） | 横屏方向翻转、自动解锁改 Seq 通道、防窥预插虚拟屏、静音文案澄清 | `remote_page.dart`、`uu_chrome.dart` | 已提交 80861b9，待真机验证 |
+| A | 打包、构建笔记、被控端日志排查 | — | 进行中 |
+| B（协作者） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart`（必要时 `gestures.dart`） | 待开工，分支 `feat/gesture-intent` |
+| B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 待开工，分支 `refactor/action-drawer` |
+
+分工边界：A 不碰 `remote_input.dart`，B 不改防窥/自动解锁逻辑；两边都要动 `uu_chrome.dart` 时先在 issue 里对齐。
+各自切分支、PR 回 `local/1.5.3-android`，不要直接推主线。
+
+### 8.1 手势引擎：滚动 vs 缩放
+
+现状不足：只用 focalPoint 漂移 + `d.scale` 阈值 0.06 判缩放，两指同向但指尖有平行漂移时会误锁缩放；滚轮固定 `dy/4` 一格，快慢手感一致。
+
+目标实现：
+
+1. 数据源：画布外层挂 `Listener`（onPointerDown/Move/Up），用 pointer id 记录每根手指的坐标；现有 Scale 回调只负责 pan/缩放。
+2. 初始窗口：第二根手指按下后 100ms 内，分别求两指相对各自按下点的位移向量 v1、v2。
+3. 判定（一旦锁定，本次手势内不再切换，沿用 `_twoFingerMode` 状态机）：
+   - 单帧两指位移都 ≥ 8px 才计入采样；
+   - θ = angle(v1, v2) < **30°** 的采样点 ≥ 6 个 → 锁**滚动**；
+   - v1·v2 < 0（等价 θ > 150°）的采样点 ≥ 6 个 → 锁**缩放**；
+   - 100ms 窗口结束证据不足时最多观察到 160ms，仍不足默认锁滚动（误触缩放代价更大）；
+   - 按下后前 3 帧（约 48ms）不采样，避开触点抖动。
+4. `pinchZoom=false` 时永不进缩放模式，全部按滚动处理。
+5. 水平方向可先留 TODO，只做垂直滚动。
+
+参考依据：Google Android 手势指南「滚动量随手势速度变化（drag/swipe/fling）」；专利 CN113986109B 的双指夹角阈值 0~35° + 至少 6 对采样点；Android 常见 pinch 判定为「两指位移分量相乘为负」。
+
+### 8.2 动态滚动灵敏度
+
+- 每次滚动更新取 `focalPointDelta.dy`，维护 EMA 速度 `v = 0.7*v + 0.3*(dy/dt)`；150ms 无事件后 v 衰减归零。
+- 按 |v| 查表换「每格像素」：`<300 px/s → 60px/格`、`300–1200 → 线性 60→35`、`>1200 → 20px/格`，单帧最多 2 格。
+- 积分器保留小数（现有 `_mouseScrollIntegral`），松手清零；参数提成 const 便于真机微调。
+- 验收：galgame 快进连点与浏览器长页面各试一次，慢速能停在指定行，快速甩动不丢步。
+
+### 8.3 操作页 IA 重构
+
+现状：一级菜单平铺「操控方案 / 其他设置 / 会话设置 / 更多操作 / 手势与触摸模式 / 断开」，而手势开关藏在「其他设置」，与「手势与触摸模式」帮助项割裂。
+
+目标一级结构：
+
+1. **本机操控** → 手势与触摸（滚动灵敏度、双指缩放开关、手势说明）、按键放大、点击震动
+2. **虚拟按键** → 操控方案（现 schemes 页）、键位编辑
+3. **显示与画质** → 画质/缩放/吸附（能接的接，接不上的隐藏）
+4. **被控端** → 声音串流（原名「静音」，语义见第 6 节）、退出锁屏、物理关屏、自动解锁
+5. **更多操作** / **断开连接**（红色）
+
+原则：同一概念只出现一处；只搬位置，不改默认值。
+
+## 9. 真机测试清单（每版过一遍）
 
 1. 连接后横屏；关掉系统自动旋转，左右翻转手机应保持横屏并切换左右方向。
 2. 黑边区域为纯黑（OLED 不发光）。
@@ -109,16 +166,16 @@ flutter build apk --release --target-platform android-arm64
 4. 键盘面板：tab 切换、唤 IME 立即弹出、IME 开着时点外不退出、IME 收起后点外可返回。
 5. 悬浮键：点击有按压反馈/震动；按住 Ctrl 快进（galgame）；拖动可移位并持久化。
 6. 右缘：四块区域整块可点；点外收起；闲置 4s 淡出。
-7. 设置页：静音 / 退出锁屏 / 自动解锁 / 防窥开关逐一生效；防窥点击瞬间有转圈，「No virtual displays」出现后 4s 自动重试。
+7. 设置页：声音串流 / 退出锁屏 / 自动解锁 / 防窥开关逐一生效；防窥点击瞬间有转圈，先预插虚拟屏、约 4s 后开启，失败会回滚并提示。
 8. 退出会话后：被控端物理屏恢复、声音恢复、未勾选时不锁屏。
 
-## 9. 已知问题
+## 10. 已知问题
 
 - 手动输密码后偶发串流卡在锁屏帧（Winlogon 安全桌面切换），新版未稳定复现，暂时搁置。
 - 首次开启虚拟屏防窥的驱动竞态见第 6 节；若多次重试仍失败，重启被控端一次。
 - 24H2 上第三方虚拟屏退出后可能无法恢复（上游注释），RustDesk 自带（Amyuni）未观察到。
 
-## 10. 沟通
+## 11. 沟通
 
 - 功能/接口有疑问先在 PR 或 issue 里写清场景和期望行为；改共享代码前先对齐。
 - 被控端排查日志位置（Windows）：`C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server\RustDesk_rCURRENT.log`。

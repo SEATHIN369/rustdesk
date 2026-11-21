@@ -34,6 +34,11 @@ workspace member. `base::config::keys` re-exports the handful of keys
   - Mobile: `flutter/lib/mobile/`
   - Shared: `flutter/lib/common/` and `flutter/lib/models/`
 
+## Docs In This Repo
+
+* `TROUBLESHOOTING.md` -- how to diagnose a reported failure (evidence first, then attribution, then the minimal fix) plus the Windows-side traps already paid for: A/W macro resolution in `src/platform/windows.cc`, what the Winlogon secure desktop refuses, ghost displays from `CDS_RESET`, DisplayConfig DPI, build/deploy verification. Read it before debugging a "no reaction" report.
+* `CHECKLIST.md` -- feature goals and per-item real-device test status. `ANDROID_BUILD_NOTES.md` -- build steps. `COLLABORATION.md` -- split with the other contributor.
+
 ## Rust Rules
 
 * Avoid `unwrap()` / `expect()` in production code.

@@ -782,7 +782,7 @@ class _UuChromeState extends State<UuChrome> {
               }
             },
           );
-        });
+        }),
         _toggleRow('断开后自动恢复（声音与屏幕）',
             hostControl && restoreOnDisconnect, (v) {
           if (!hostControl) return;

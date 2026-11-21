@@ -6,14 +6,14 @@
 //! string payload is `TogglePrivacyMode.impl_key`.
 
 use hbb_common::config::Config;
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use std::sync::Mutex;
 
 lazy_static::lazy_static! {
     static ref STATE: Mutex<State> = Mutex::new(State::load());
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct State {
     #[serde(default)]
     pub mute: bool,
@@ -38,6 +38,19 @@ fn default_height() -> u32 {
     1080
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            mute: false,
+            restore_on_disconnect: false,
+            privacy_persist: false,
+            prev_mute: None,
+            display_width: default_width(),
+            display_height: default_height(),
+        }
+    }
+}
+
 fn path() -> std::path::PathBuf {
     Config::path("uu-host-state.json")
 }
@@ -58,10 +71,10 @@ impl State {
         match serde_json::to_string_pretty(self) {
             Ok(s) => {
                 if let Err(e) = std::fs::write(&p, s) {
-                    log::error!("Failed to save host control state: {e}");
+                    hbb_common::log::error!("Failed to save host control state: {e}");
                 }
             }
-            Err(e) => log::error!("Failed to encode host control state: {e}"),
+            Err(e) => hbb_common::log::error!("Failed to encode host control state: {e}"),
         }
     }
 }
@@ -129,7 +142,7 @@ pub fn init() {
     crate::privacy_mode::set_virtual_display_mode(width, height);
     if mute {
         if let Err(e) = set_system_mute(true) {
-            log::error!("Failed to re-apply host mute: {e}");
+            hbb_common::log::error!("Failed to re-apply host mute: {e}");
         }
     }
 }
@@ -141,21 +154,21 @@ pub fn set_mute(mute: bool) {
         }
         s.mute = mute;
         if let Err(e) = set_system_mute(mute) {
-            log::error!("Failed to set host mute {mute}: {e}");
+            hbb_common::log::error!("Failed to set host mute {mute}: {e}");
         } else {
-            log::info!("Host mute set to {mute}");
+            hbb_common::log::info!("Host mute set to {mute}");
         }
     });
 }
 
 pub fn set_restore_on_disconnect(restore: bool) {
     with_state(|s| s.restore_on_disconnect = restore);
-    log::info!("Host mute restore-on-disconnect set to {restore}");
+    hbb_common::log::info!("Host mute restore-on-disconnect set to {restore}");
 }
 
 pub fn set_privacy_persist(persist: bool) {
     with_state(|s| s.privacy_persist = persist);
-    log::info!("Host privacy persist set to {persist}");
+    hbb_common::log::info!("Host privacy persist set to {persist}");
 }
 
 pub fn privacy_persist() -> bool {
@@ -176,9 +189,9 @@ pub fn on_all_connections_closed() {
         });
         let target = prev.unwrap_or(false);
         if let Err(e) = set_system_mute(target) {
-            log::error!("Failed to restore host mute {target}: {e}");
+            hbb_common::log::error!("Failed to restore host mute {target}: {e}");
         } else {
-            log::info!("Host mute restored to {target} after session end");
+            hbb_common::log::info!("Host mute restored to {target} after session end");
         }
     }
 }

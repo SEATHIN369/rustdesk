@@ -77,4 +77,7 @@ pub mod privacy_mode;
 #[cfg(windows)]
 pub mod virtual_display_manager;
 
+#[cfg(windows)]
+pub mod host_controls;
+
 mod kcp_stream;

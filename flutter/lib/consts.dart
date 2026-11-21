@@ -29,6 +29,7 @@ const String kPlatformAdditionsAmyuniVirtualDisplays =
 const String kPlatformAdditionsHasFileClipboard = "has_file_clipboard";
 const String kPlatformAdditionsSupportedPrivacyModeImpl =
     "supported_privacy_mode_impl";
+const String kPlatformAdditionsUuHostControl = "uu_host_control";
 
 const String kPrivacyModeImplMag = 'privacy_mode_impl_mag';
 const String kPrivacyModeImplExcludeFromCapture =

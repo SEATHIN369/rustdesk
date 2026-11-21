@@ -677,6 +677,8 @@ pub async fn start_server(is_server: bool, no_server: bool) {
 
     if is_server {
         #[cfg(windows)]
+        crate::host_controls::init();
+        #[cfg(windows)]
         if !crate::is_server() {
             if let Err(err) = start_gui_ipc().await {
                 log::error!("Local hosting unavailable: failed to start GUI IPC listener: {err:#}");

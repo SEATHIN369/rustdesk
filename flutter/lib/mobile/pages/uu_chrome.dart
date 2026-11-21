@@ -36,6 +36,8 @@ class _UuChromeState extends State<UuChrome> {
   Timer? _privacyRetryTimer;
   Timer? _privacyFailTimer;
   bool? _privacyPendingOn;
+  bool _mutePending = false;
+  Timer? _mutePendingTimer;
   Worker? _privacyWorker;
   Worker? _railWorker;
   bool _faded = false;
@@ -70,6 +72,7 @@ class _UuChromeState extends State<UuChrome> {
     _privacyStartTimer?.cancel();
     _privacyRetryTimer?.cancel();
     _privacyFailTimer?.cancel();
+    _mutePendingTimer?.cancel();
     _privacyWorker?.dispose();
     _railWorker?.dispose();
     super.dispose();
@@ -409,7 +412,7 @@ class _UuChromeState extends State<UuChrome> {
         break;
       case 'rename':
         final controller = TextEditingController(text: scheme.name);
-        final name = await showDialog<String>(
+        final name = await _withIme(() => showDialog<String>(
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('方案名称'),
@@ -423,7 +426,7 @@ class _UuChromeState extends State<UuChrome> {
                   child: const Text('确定')),
             ],
           ),
-        );
+        ));
         if (name == null || name.isEmpty || !mounted) return;
         if (uuState.schemes.any((s) => s.name == name && s != scheme)) return;
         setState(() {
@@ -465,7 +468,7 @@ class _UuChromeState extends State<UuChrome> {
 
   Future<void> _newScheme(BuildContext context) async {
     final controller = TextEditingController(text: '新方案');
-    final name = await showDialog<String>(
+    final name = await _withIme(() => showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('新建方案'),
@@ -479,7 +482,7 @@ class _UuChromeState extends State<UuChrome> {
               child: const Text('确定')),
         ],
       ),
-    );
+    ));
     if (name == null || name.isEmpty || !mounted) return;
     if (uuState.schemes.any((s) => s.name == name)) return;
     setState(() {
@@ -535,6 +538,70 @@ class _UuChromeState extends State<UuChrome> {
     );
   }
 
+  // The remote page permanently holds FLAG_ALT_FOCUSABLE_IM so its hidden
+  // TextField can control the IME; that flag also suppresses the system
+  // keyboard for dialogs, so lift it only while an input dialog is up.
+  Future<T?> _withIme<T>(Future<T?> Function() run) async {
+    await gFFI.invokeMethod("enable_soft_keyboard", true);
+    try {
+      return await run();
+    } finally {
+      if (mounted) gFFI.invokeMethod("enable_soft_keyboard", false);
+    }
+  }
+
+  bool get _hostControlSupported =>
+      gFFI.ffiModel.pi.platformAdditions.containsKey(
+          kPlatformAdditionsUuHostControl);
+
+  // Reuses the privacy-mode message as a command channel: the host side of
+  // this fork treats impl keys prefixed with "uu:" as host controls.
+  void _sendHostCmd(String cmd, bool on) {
+    bind.sessionTogglePrivacyMode(
+        sessionId: gFFI.sessionId, implKey: 'uu:$cmd', on: on);
+  }
+
+  String _hostIntentKey(String name) => 'uu-host-$name:${widget.id}';
+
+  bool _hostIntent(String name, {bool fallback = false}) {
+    final raw = bind.mainGetLocalOption(key: _hostIntentKey(name));
+    return raw.isEmpty ? fallback : raw == '1';
+  }
+
+  void _setHostIntent(String name, bool on) {
+    bind.mainSetLocalOption(key: _hostIntentKey(name), value: on ? '1' : '0');
+  }
+
+  String _hostSetting(String name, String fallback) {
+    final raw = bind.mainGetLocalOption(key: _hostIntentKey(name));
+    return raw.isEmpty ? fallback : raw;
+  }
+
+  void _setHostSetting(String name, String value) {
+    bind.mainSetLocalOption(key: _hostIntentKey(name), value: value);
+  }
+
+  (int, int) _parseDisplayMode(String mode) {
+    final parts = mode.split('x');
+    if (parts.length == 2) {
+      return (int.tryParse(parts[0]) ?? 1920, int.tryParse(parts[1]) ?? 1080);
+    }
+    return (1920, 1080);
+  }
+
+  void _toggleMute(bool on) {
+    _mutePendingTimer?.cancel();
+    setState(() {
+      _mutePending = true;
+      _setHostIntent('mute', on);
+    });
+    _sendHostCmd('mute', on);
+    // No ack frame for host controls; give the host a beat, then settle.
+    _mutePendingTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _mutePending = false);
+    });
+  }
+
   Widget _settingsPage(BuildContext context) {
     final scheme = uuState.active;
     final sessionId = gFFI.sessionId;
@@ -544,6 +611,10 @@ class _UuChromeState extends State<UuChrome> {
       bind.sessionToggleOption(sessionId: sessionId, value: option);
       setState(() {});
     }
+    final hostControl = _hostControlSupported;
+    final muted = _hostIntent('mute');
+    final restoreOnDisconnect = _hostIntent('restore');
+    final displayMode = _hostSetting('display', '1920x1080');
 
     return ListView(
       children: [
@@ -567,9 +638,44 @@ class _UuChromeState extends State<UuChrome> {
           child: Text('被控端',
               style: TextStyle(color: Colors.white54, fontSize: 11)),
         ),
-        _toggleRow('电脑声音不传到手机', optionOn('disable-audio'), (v) {
-          toggleOption('disable-audio');
-        }, subtitle: '只断开串流音频，电脑扬声器照常发声'),
+        Builder(builder: (context) {
+          final subtitle = _mutePending
+              ? Row(children: [
+                  const SizedBox(
+                    width: 10,
+                    height: 10,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white70),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(muted ? '正在静音…' : '正在恢复声音…',
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 11)),
+                ])
+              : Text(
+                  hostControl
+                      ? '静音被控端扬声器（不影响远程串流）'
+                      : '需被控端为本项目编译版 RustDesk',
+                  style:
+                      const TextStyle(color: Colors.white38, fontSize: 11));
+          return SwitchListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            title: const Text('电脑静音',
+                style: TextStyle(color: Colors.white, fontSize: 13)),
+            subtitle: subtitle,
+            value: muted,
+            onChanged: _mutePending
+                ? null
+                : (v) {
+                    if (!hostControl) {
+                      showToast('需被控端为本项目编译版 RustDesk');
+                      return;
+                    }
+                    _toggleMute(v);
+                  },
+          );
+        }),
         _toggleRow('退出远控时锁定电脑', optionOn('lock-after-session-end'), (v) {
           toggleOption('lock-after-session-end');
         }),
@@ -620,6 +726,12 @@ class _UuChromeState extends State<UuChrome> {
                 return;
               }
               setState(() => _privacyPendingOn = !on);
+              if (hostControl) {
+                final (w, h) = _parseDisplayMode(displayMode);
+                _sendHostCmd('display:${w}x$h', true);
+                _sendHostCmd(
+                    'privacy-persist', !on ? !restoreOnDisconnect : false);
+              }
               _privacyStartTimer?.cancel();
               _privacyRetryTimer?.cancel();
               _privacyFailTimer?.cancel();
@@ -670,7 +782,60 @@ class _UuChromeState extends State<UuChrome> {
               }
             },
           );
-        }),
+        });
+        _toggleRow('断开后自动恢复（声音与屏幕）',
+            hostControl && restoreOnDisconnect, (v) {
+          if (!hostControl) return;
+          setState(() {
+            _setHostIntent('restore', v);
+            _sendHostCmd('restore', v);
+            if (PrivacyModeState.find(widget.id).value.isNotEmpty) {
+              _sendHostCmd('privacy-persist', !v);
+            }
+          });
+        },
+            subtitle: hostControl
+                ? (restoreOnDisconnect
+                    ? '断开后恢复原来的声音和屏幕'
+                    : '保持静音/关屏状态，长期有效')
+                : '需被控端为本项目编译版 RustDesk'),
+        if (hostControl)
+          ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            title: const Text('虚拟屏尺寸',
+                style: TextStyle(color: Colors.white, fontSize: 13)),
+            subtitle: Text('当前 $displayMode · 下次开启关屏时生效',
+                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            trailing: const Icon(Icons.chevron_right,
+                color: Colors.white54, size: 18),
+            onTap: () async {
+              const modes = {
+                '1280x720': '1280×720（界面最大）',
+                '1536x864': '1536×864（约 125%）',
+                '1920x1080': '1920×1080（100%）',
+                '2560x1440': '2560×1440（更细腻）',
+              };
+              final picked = await showDialog<String>(
+                context: context,
+                builder: (ctx) => SimpleDialog(
+                  title: const Text('虚拟屏尺寸'),
+                  children: modes.entries
+                      .map((e) => SimpleDialogOption(
+                            onPressed: () => Navigator.of(ctx).pop(e.key),
+                            child: Text(
+                                '${e.value}${e.key == displayMode ? '  ✓' : ''}'),
+                          ))
+                      .toList(),
+                ),
+              );
+              if (picked == null || !mounted) return;
+              _setHostSetting('display', picked);
+              final (w, h) = _parseDisplayMode(picked);
+              _sendHostCmd('display:${w}x$h', true);
+              setState(() {});
+            },
+          ),
         const Divider(color: Colors.white12),
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 10, 16, 2),
@@ -705,7 +870,7 @@ class _UuChromeState extends State<UuChrome> {
                     color: Colors.white54, size: 18),
                 onTap: () async {
                   final controller = TextEditingController(text: pwd);
-                  final ok = await showDialog<bool>(
+                  final ok = await _withIme(() => showDialog<bool>(
                     context: context,
                     builder: (ctx) => AlertDialog(
                       title: const Text('Windows 登录密码'),
@@ -725,7 +890,7 @@ class _UuChromeState extends State<UuChrome> {
                             child: const Text('确定')),
                       ],
                     ),
-                  );
+                  ));
                   if (ok != true || !mounted) return;
                   setState(() => cfg['pwd'] = controller.text);
                   store();

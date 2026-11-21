@@ -77,8 +77,17 @@ flutter build apk --release --target-platform android-arm64
 ## 6. 关键机制备忘
 
 - **会话选项**：`sessionToggleOption` 发 Misc.option 立即生效（`lock-after-session-end` 退出锁屏）。
-  `disable-audio` 只是被控端**不再向客户端发音频帧**，不会关电脑扬声器；1.5.3 协议没有主机静音接口
-  （取证与方案见 `docs/host-mute-helper.md`：主机侧热键助手 + 手机发 Ctrl+Alt+Shift+F9/F10）。
+  `disable-audio` 只是被控端**不再向客户端发音频帧**，不会关电脑扬声器；1.5.3 官方协议没有主机静音接口。
+  主机静音改为**做进自编译的被控端 RustDesk**（用户要求不装额外软件）：手机端复用
+  `sessionTogglePrivacyMode` 的 `impl_key` 走 `uu:mute` / `uu:restore` / `uu:privacy-persist` /
+  `uu:display:WxH` 命令；主机 `src/host_controls.rs` 用 WASAPI `SetMute`，状态持久化到
+  `uu-host-state.json`，并在 `platform_additions` 上报 `uu_host_control`。详见 `docs/host-mute-helper.md`。
+- **主机命令通道**：官方 Android `.so` 无法发送新协议消息，`TogglePrivacyMode.impl_key` 是唯一带自由字符串、
+  且手机端 Dart 能直接调用的信道；主机在 `toggle_privacy_mode` 开头拦截 `uu:` 前缀（仍要求已认证远控连接）。
+  除 `uu:mute` 外，其它 `uu:` 键不会进入官方防窥逻辑。
+- **静音/关屏长期有效**：最后一个远控连接断开时，若 `privacy_persist` 且正在防窥，跳过
+  `virtual_display_manager::reset_all()`；静音按 `restore_on_disconnect` 决定是否恢复（默认保持）。
+  主机重启后物理屏恢复（安全兜底），静音状态由服务启动时重放。
 - **防窥必须走专用接口**：`bind.sessionTogglePrivacyMode(sessionId, implKey, on)`，
   `implKey = 'privacy_mode_impl_virtual_display'`（来自 `pi.platformAdditions['supported_privacy_mode_impl']` 列表）。
   不要用通用 `toggleOption('privacy-mode')`——只发 option 不翻服务端 config。
@@ -88,7 +97,11 @@ flutter build apk --release --target-platform android-arm64
   服务端 `turn_on` 只等虚拟屏 5s，而 Amyuni 插入后要约 6s 才 ACTIVE，直接开防窥会报
   “No virtual displays”。客户端流程：先 `sessionToggleVirtualDisplay(index: 0, on: true)` 预插 →
   4s 后发防窥 on → 12s 无变化重发 → 20s 仍失败则回滚预插并提示。开防窥时 `restore()` 会拔掉全部虚拟屏，
-  关防窥即恢复物理屏，不需要再手动减屏。
+  关防窥即恢复物理屏，不需要再手动减屏。**自编译主机版**额外支持：断开后保持关屏（`uu:privacy-persist`）、
+  虚拟屏尺寸预设 `1280×720 / 1536×864（≈125%）/ 1920×1080 / 2560×1440`（`uu:display:WxH`，下次开启生效）。
+- **IME 弹窗**：远控页常驻 `FLAG_ALT_FOCUSABLE_IM`（`remote_page.dart` 的 `enable_soft_keyboard(false)`），
+  设置页里的 TextField 因此唤不出系统键盘。`uu_chrome.dart` 的 `_withIme()` 在弹窗前临时放行、关闭后恢复，
+  已覆盖方案重命名/新建/Windows 登录密码三个输入框。
 - **自动解锁**：无原生接口，Dart 实现。密码存 local option `uu-auto-unlock:<peerId>`（JSON `{on,pwd}`），
   首帧后 2s 一次性 `sessionInputString(pwd)`（Seq 通道，锁屏唯一可靠路径；逐字符 `inputKey` 走 Chr 通道，
   锁屏收不到），400ms 后 `VK_RETURN`，每个会话一次。**只在电脑锁屏时打开**，否则密码会打进焦点窗口。

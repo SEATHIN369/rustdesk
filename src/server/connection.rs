@@ -1992,6 +1992,7 @@ impl Connection {
                 "supported_privacy_mode_impl".into(),
                 json!(privacy_mode::get_supported_privacy_mode_impl()),
             );
+            platform_additions.insert("uu_host_control".into(), json!(true));
         }
         #[cfg(target_os = "macos")]
         {
@@ -4819,6 +4820,13 @@ impl Connection {
     }
 
     async fn toggle_privacy_mode(&mut self, t: TogglePrivacyMode) {
+        #[cfg(windows)]
+        if let Some(cmd) = t.impl_key.strip_prefix("uu:") {
+            if self.is_authed_remote_conn() {
+                crate::host_controls::handle_command(cmd, t.on);
+            }
+            return;
+        }
         if t.on {
             self.turn_on_privacy(t.impl_key).await;
         } else {
@@ -7099,7 +7107,14 @@ mod raii {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 display_service::restore_resolutions();
                 #[cfg(windows)]
-                let _ = virtual_display_manager::reset_all();
+                {
+                    crate::host_controls::on_all_connections_closed();
+                    let keep_privacy = crate::host_controls::privacy_persist()
+                        && privacy_mode::is_in_privacy_mode();
+                    if !keep_privacy {
+                        let _ = virtual_display_manager::reset_all();
+                    }
+                }
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote || self.1 == AuthConnType::ViewCamera {
                     wayland::try_close_portal_session();

@@ -4,6 +4,7 @@ use hbb_common::{allow_err, bail, config::Config, log, ResultType};
 use std::{
     io::Error,
     ops::{Deref, DerefMut},
+    sync::Mutex,
     thread,
     time::Duration,
 };
@@ -30,6 +31,23 @@ use winapi::{
 pub(super) const PRIVACY_MODE_IMPL: &str = super::PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY;
 
 const CONFIG_KEY_REG_RECOVERY: &str = "reg_recovery";
+
+// The client picks a virtual-display size; a smaller mode is the practical
+// equivalent of a larger Windows display scale.
+lazy_static::lazy_static! {
+    static ref DESIRED_MODE: Mutex<(u32, u32)> = Mutex::new((1920, 1080));
+}
+
+pub fn set_desired_mode(width: u32, height: u32) {
+    if width >= 800 && height >= 600 && width <= 7680 && height <= 4320 {
+        *DESIRED_MODE.lock().unwrap() = (width, height);
+        log::info!("Virtual display mode set to {width}x{height}");
+    }
+}
+
+fn desired_mode() -> (u32, u32) {
+    *DESIRED_MODE.lock().unwrap()
+}
 
 struct Display {
     dm: DEVMODEW,
@@ -323,9 +341,10 @@ impl PrivacyModeImpl {
 
     #[inline]
     fn default_display_modes() -> Vec<MonitorMode> {
+        let (width, height) = desired_mode();
         vec![MonitorMode {
-            width: 1920,
-            height: 1080,
+            width,
+            height,
             sync: 60,
         }]
     }
@@ -487,11 +506,12 @@ impl PrivacyMode for PrivacyModeImpl {
         let primary_display_name = guard.set_primary_display()?;
         guard.disable_physical_displays()?;
         Self::commit_change_display(CDS_RESET)?;
-        // Explicitly set the resolution(virtual display) to 1920x1080.
+        // Explicitly set the resolution(virtual display) to the size chosen by the client.
+        let (width, height) = desired_mode();
         allow_err!(crate::platform::change_resolution(
             &primary_display_name,
-            1920,
-            1080
+            width,
+            height
         ));
         let reg_connectivity_2 = reg_display_settings::read_reg_connectivity()?;
 

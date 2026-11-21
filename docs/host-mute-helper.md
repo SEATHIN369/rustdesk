@@ -1,129 +1,73 @@
-# 被控端「电脑真正静音」设计（2026-11-21）
+# 被控端「电脑真正静音 / 长期关屏」设计（2026-11-21，方案改为内置主机版）
 
-> 目标：手机端一键让**被控电脑的扬声器/耳机**真实静音（系统音量图标变静音），而不只是断开串流音频。
-> 被控端保持官方 RustDesk 1.5.3 安装版，不重编、不替换。
+> 目标：手机端一键让**被控电脑**真实静音（系统音量图标变静音），关屏/静音**一次设定长期有效**，并提供「断开后是否恢复」开关。
+> 约束（用户拍板）：**不额外装软件**，功能必须做进被控端 RustDesk 本体。
 
-## 1. 结论先行
+## 1. 结论
 
-RustDesk 1.5.3 协议里**没有**可用的主机静音通道（下方取证）。因此采用：
+官方 RustDesk 1.5.3 协议里没有可用的主机静音通道（§2 取证），键盘模拟也走不通，因此：
 
-**主机侧常驻小工具「UU 静音助手」 + 手机端发送罕见组合键触发**
+- **自编译被控端 RustDesk，替换安装目录里的 `librustdesk.dll`**（Flutter UI/资源仍用官方 1.5.3 的，Dart 接口未变，可直接替换）。
+- 主机新增 `src/host_controls.rs`：用 WASAPI `IAudioEndpointVolume::SetMute`（**幂等**）控制默认播放设备，状态落在 `uu-host-state.json`，服务/主机重启后重新应用。
+- **控制通道复用既有 `TogglePrivacyMode` 消息的 `impl_key` 字符串**（官方手机端 `.so` 无法发送新协议消息，这是唯一带自由字符串的信道）：
+  - `uu:mute` + on/off → 主机静音/取消静音
+  - `uu:restore` + on/off → 断开后是否恢复原状态（默认不恢复 = 长期有效）
+  - `uu:privacy-persist` + on/off → 断开后是否保留关屏（虚拟屏）
+  - `uu:display:WxH` → 设置虚拟屏尺寸（下次开启关屏生效）
+- 主机在 `platform_additions` 里上报 `"uu_host_control": true`，手机端据此显示/隐藏这些开关；官方主机不显示。
 
-- 助手用 Windows Core Audio API `IAudioEndpointVolume::SetMute` 做幂等开/关，状态由助手持有；
-- 手机端只发 `Ctrl+Alt+Shift+F9`（静音开）/ `Ctrl+Alt+Shift+F10`（静音关），走现有键盘通道；
-- 零网络端口、不需要主机管理员权限、不需要改 RustDesk。
-
-## 2. 为什么不能用键盘模拟静音键
+## 2. 为什么不能用 Windows 静音快捷键
 
 | 路径 | 结论 | 依据 |
 |---|---|---|
-| `inputKey('VK_VOLUME_MUTE')` | 不可用 | 客户端 `KEY_MAP`（src/client.rs:5100）没有音量键 |
-| Flutter 音量键通路 `tapHidKey` | 不可用 | 服务端 `ControlKey::VolumeMute` 在 Translate 模式被丢弃（src/server/input_service.rs:2262 的 match 无 ControlKey 分支）；Legacy 模式的 `KEY_MAP`（input_service.rs:2639）同样没有它 |
-| `sessionHandleFlutterRawKeyEvent` 发 VK 0xAD | 不可用 | Android 侧 Map 模式用 `usb_hid` 映射（keyboard.rs:1410+），而该路径构造的 Event `usb_hid = 0`（ui_session_interface.rs:975） |
-| 即便能发 `VK_VOLUME_MUTE` | 语义不对 | 系统媒体键是**切换**语义，无法保证“当前一定是静音”，会与用户本机操作不同步 |
+| 客户端 `KEY_MAP` 发 `VK_VOLUME_MUTE` | 不可用 | `src/client.rs:5100` 没有音量键 |
+| 输入面板 `ControlKey::VolumeMute` | 不可用 | 服务端 `translate_keyboard_mode`（src/server/input_service.rs:2262）只处理 Seq/Chr/Unicode/Win2winHotkey，ControlKey 被丢弃；Legacy `KEY_MAP`（input_service.rs:2639）也没有音量键 |
+| `sessionHandleFlutterRawKeyEvent` 发 VK 0xAD | 不可用 | Android Map 模式按 `usb_hid` 映射（src/keyboard.rs），而该路径构造的 Event `usb_hid=0`（src/ui_session_interface.rs:975） |
+| 即便能发媒体键 | 语义不对 | 媒体键是**切换**语义，无法保证“当前一定静音”，更无法在断开时按原状态恢复 |
 
-## 3. 方案对比
+## 3. 主机侧实现
 
-| 方案 | 需要装东西 | 确定性 | 安全性 | 结论 |
-|---|---|---|---|---|
-| **热键助手（选定）** | 主机一个自启小工具 | 高（助手持有状态，开=开） | 高（无端口、只认本机热键） | ✅ |
-| Windows 终端通道 | 无 | 高 | 中（shell 权限面大） | 备选：1.5.3 FFI 有 terminal，但需终端授权 + 手机端终端 UI，重 |
-| 主机自编译 RustDesk 打补丁 | 换主机程序 | 高 | 中 | 不选：违背“官方安装版被控端”约束 |
-| 剪贴板暗号 + 助手轮询 | 主机小工具 | 中 | 中（污染剪贴板） | 仅作 v2 回执通道备选 |
+### 3.1 静音与持久化 (`src/host_controls.rs`)
 
-## 4. 交互设计（手机端）
+- `set_mute(bool)`：首次静音时记录 `prev_mute`，调用 `SetMute`；写入 `uu-host-state.json`。
+- `init()`：`--server` 启动时重放持久化的静音状态。
+- `on_all_connections_closed()`：
+  - `restore_on_disconnect = true` 时恢复 `prev_mute`（没有记录则取消静音）；
+  - 默认 `false`，保持静音，长期有效。
+- 状态文件位于 RustDesk 配置目录（`Config::path("uu-host-state.json")`）。
 
-落位按 `COLLABORATION.md` §8.3 的新操作面板：
+### 3.2 关屏（虚拟屏防窥）跨会话保持
 
-1. **操作面板顶部「声音」按钮**
-   - 单击：切换「电脑声音不传到手机」（`disable-audio`，只影响串流）
-   - **长按 600ms**：切换「电脑真正静音」，松手后 Toast：「已请求电脑静音 / 已解除电脑静音」；
-     若 1.5s 内没有……（无回执，见 §7）则直接显示乐观状态。
-2. **外设分组**新增正式开关：
-   - 标题：「电脑真正静音（主机扬声器）」
-   - 副标题：「需在被控端安装 UU 静音助手」
-   - 开关状态存本地 `uuState`（`uu-host-mute`），与串流静音互不影响；
-   - `仅观看` 模式下置灰。
-3. 首次打开时弹一次说明卡：助手下载/安装位置、热点键表、未安装时无反应。
+- 官方行为：最后一个远控连接断开时 `virtual_display_manager::reset_all()` 会关掉防窥并拔掉所有虚拟屏（这就是“退出软件后又复位”）。
+- 现在：若 `privacy_persist` 为真且当前正处于防窥模式，则跳过 `reset_all()`；关屏状态保留到下次会话或用户手动关闭。
+- 默认值由手机端在开启关屏时下发（`privacy-persist = !restore`）。
+- 注意：主机重启/重启服务后物理屏恢复（虚拟屏驱动随进程卸载），这是有意的安全兜底。
 
-文案必须把两个静音拆开：
+### 3.3 虚拟屏尺寸（替代“125% 缩放”）
 
-| 开关 | 作用范围 |
-|---|---|
-| 电脑声音不传到手机 | 只停串流音频，电脑照常发声 |
-| 电脑真正静音 | 设置主机默认输出设备 Mute，本机和串流都无声 |
+- 官方虚拟屏固定 1920×1080@60，Windows 缩放对虚拟屏不生效。
+- 现在 `desired_mode` 可配置：`1280×720`（界面最大）/ `1536×864`（约 125%）/ `1920×1080` / `2560×1440`。
+- 用于 `default_display_modes()` 和开启防窥后的 `change_resolution()`；选择会持久化，下次开启关屏生效。
 
-## 5. 热键表
+### 3.4 手机端 UI
 
-| 快捷键 | 动作 |
-|---|---|
-| `Ctrl+Alt+Shift+F9` | 置为静音（幂等） |
-| `Ctrl+Alt+Shift+F10` | 解除静音（幂等） |
-| `Ctrl+Alt+Shift+F11` | 切换（可选用，托盘菜单同款） |
+`uu_chrome.dart` 的「被控端」分组，同一卡片、同一 pending 交互：
 
-选 F9/F10 的原因：客户端 `KEY_MAP` 有 F1–F12；`Ctrl+Alt+Shift` 三修饰键组合在日常软件中几乎不冲突；
-服务端 Legacy 模式会原样合成该组合（`legacy_modifiers` + `process_control_key`）。
+1. 电脑静音（Switch，1.2s pending）
+2. 操控时物理关屏（Switch，带预插虚拟屏流程）
+3. 断开后自动恢复（声音与屏幕，Switch，默认关 = 长期有效）
+4. 虚拟屏尺寸（弹窗选择，提示“下次开启关屏时生效”）
 
-## 6. 实现规格
+主机不支持时报「需被控端为本项目编译版 RustDesk」。
 
-### 6.1 手机端（Dart，本人）
+## 4. 构建与替换
 
-```dart
-Future<void> _sendHostMute(bool on) async {
-  final name = on ? 'F9' : 'F10';
-  for (final down in [true, false]) {
-    bind.sessionInputKey(
-      sessionId: gFFI.sessionId,
-      name: name,
-      down: down,
-      press: false,
-      alt: true,
-      ctrl: true,
-      shift: true,
-      command: false,
-    );
-    if (down) await Future.delayed(const Duration(milliseconds: 80));
-  }
-}
-```
+- 依赖：Rust MSVC 1.100、MSVC 14.51（`D:\soft\BuildTools`）、LLVM/libclang（bindgen）、vcpkg x64-windows-static（aom/libvpx/libyuv/opus/libjpeg-turbo，overlay 端口用本仓库 `res/vcpkg`）。
+- 编译：`cargo build --release --lib --features flutter`（产物 `target/release/librustdesk.dll`），替换安装目录同名文件；官方 Flutter UI 资源不变。
+- 替换前备份原 DLL；需要重启 RustDesk 服务（管理员）。
 
-- 长按手势用 `GestureDetector(onLongPress: ...)` 包住顶部「声音」按钮；
-- 状态写入 `uuState`，与 `disable-audio` 完全独立；
-- `ffiModel.viewOnly == true` 时不发送并 toast 提示。
+## 5. 已知限制
 
-### 6.2 主机助手（C# / .NET 8，单文件 exe）
-
-- **热键**：`RegisterHotKey(hwnd, id, MOD_CONTROL|MOD_ALT|MOD_SHIFT, VK_F9/F10/F11)`，
-  `WM_HOTKEY` 里分发；注册失败（被占用）写日志并在托盘菜单提示，可在配置文件改键。
-- **静音**：COM interop
-  `IMMDeviceEnumerator.GetDefaultAudioEndpoint(eRender, eConsole)` →
-  `IAudioEndpointVolume.SetMute(bool)`；每次调用重新取默认设备，兼容切换耳机/蓝牙。
-  不需要管理员权限（按用户默认设备）。
-- **托盘**：两态图标（静音/有声），菜单：解除静音 / 开机自启 / 查看日志 / 退出；
-  收到热键时图标闪烁一次作为本地反馈。
-- **自启**：`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，无计划任务、无服务。
-- **单实例**：命名 Mutex。
-- **日志**：`%LOCALAPPDATA%\UUMuteHelper\log.txt`（只记热键与 SetMute 结果）。
-- **分发**：`uumute-helper.exe` 单文件，放在共享文件夹；用户双击运行一次即注册自启。
-
-### 6.3 行为边界
-
-- 助手不运行 → 热键落到系统/前台应用，通常无副作用；手机端无回执，UI 文案已说明。
-- 断开会话 → 主机保持当前静音状态（符合「静音运行」语义）；需要恢复时托盘点「解除静音」或手机再长按一次。
-- 锁屏（安全桌面）→ 助手的热键不触发；此时静音状态保持，不额外处理。
-- 用户本机改了音量/静音 → 助手只是下次 SetMute 时纠正到请求值，不做持续抢占。
-
-## 7. 可选 v2：状态回执
-
-v1 无回执（手机不能确认助手是否在线）。若需要：
-- 助手收到热键后把 `MUTE:0/1` 写进剪贴板，手机端靠 RustDesk 剪贴板同步读取 → 回填开关。
-- 或助手暴露 `127.0.0.1` 的命名管道，但手机无法直连，仍需经剪贴板/终端转发，暂不做。
-
-## 8. 验收清单
-
-1. 主机播放音乐 → 手机长按「声音」→ 主机扬声器立即无声，系统音量图标变静音；
-2. 手机再长按 → 恢复有声，且音量值不变（只改 Mute 位）；
-3. 重复开/重复关不抖动（幂等）；
-4. 切到蓝牙耳机后再次触发仍作用于新的默认设备；
-5. 助手退出后触发 → 无异常副作用，手机文案提示需安装/启动助手；
-6. 仅观看模式下开关置灰。
+- 静音只作用于**默认播放设备**；切换输出设备后需要重新点一次。
+- 断开后恢复的“原状态”在首次静音时采样；若静音是服务重启后重放的，则恢复为“不静音”。
+- 关屏保持跨“会话”有效，不跨“主机重启”；虚拟屏分辨率在下次开启关屏时生效。

@@ -667,7 +667,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     final page = uuState.drawerPage.value ?? 'menu';
     // Leave the right-edge icon rail column (72 px) uncovered so the two
     // coexist; cap the width so it stays usable on small phones.
-    final width = min(430.0, (MediaQuery.of(context).size.width - 72) * 0.6);
+    final width = min(300.0, (MediaQuery.of(context).size.width - 72) * 0.6);
     final titles = {
       'menu': '操作',
       'schemes': '操控方案',
@@ -1139,14 +1139,6 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     ];
   }
 
-  List<Widget> _peripheralRows() {
-    return [
-      _navRow(Icons.touch_app_outlined, '手势与触摸', () {
-        uuState.drawerPage.value = 'gestures';
-      }),
-    ];
-  }
-
   // UU-style keymap section: a master switch inside the operation card that
   // inline-expands three rows when on. This replaces the old second-level
   // "启用按键映射" page; the real gate is uuState.keyMapEnabled (floating keys).
@@ -1193,25 +1185,17 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
             }
           });
         }),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 180),
-          alignment: Alignment.topCenter,
-          clipBehavior: Clip.hardEdge,
-          child: Align(
-            alignment: Alignment.topCenter,
-            heightFactor: moreOpen ? 1 : 0,
-            child: Column(
-              children: [
-                _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
-                  scheme.keyScale = v;
-                }),
-                _toggleRow('点击按键时震动', scheme.haptics, (v) {
-                  scheme.haptics = v;
-                }),
-              ],
-            ),
-          ),
-        ),
+        // Plain conditional, not a second AnimatedSize: nesting AnimatedSize
+        // made the outer wrapper cache a mid-animation height, so the
+        // expanded rows overflowed the controls below (二级/一级 重叠).
+        if (moreOpen)
+          _sliderRow('按键放大', scheme.keyScale, 0.7, 1.6, (v) {
+            scheme.keyScale = v;
+          }),
+        if (moreOpen)
+          _toggleRow('点击按键时震动', scheme.haptics, (v) {
+            scheme.haptics = v;
+          }),
       ],
     );
   }
@@ -1255,7 +1239,10 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         const SizedBox(height: 12),
         _groupCard('显示', Icons.monitor_outlined, _displayRows()),
         _groupCard('安全', Icons.shield_outlined, _securityRows()),
-        _groupCard('外设', Icons.usb, _peripheralRows()),
+        // 外设 分组只剩「手势与触摸」一行，去掉这层无用折叠，直接呈现。
+        _card(_navRow(Icons.touch_app_outlined, '手势与触摸', () {
+          uuState.drawerPage.value = 'gestures';
+        })),
         _groupCard('更多', Icons.more_horiz, _moreRows(context)),
       ],
     );

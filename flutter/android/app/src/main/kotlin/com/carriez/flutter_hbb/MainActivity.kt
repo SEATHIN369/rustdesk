@@ -168,15 +168,15 @@ class MainActivity : FlutterActivity() {
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_VOLUME_UP -> {
-                    volumeController.raiseVolume(null, true, AudioManager.STREAM_SYSTEM)
+                    volumeController.raiseVolume(null, true, AudioManager.STREAM_MUSIC)
                     return true
                 }
                 KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                    volumeController.lowerVolume(null, true, AudioManager.STREAM_SYSTEM)
+                    volumeController.lowerVolume(null, true, AudioManager.STREAM_MUSIC)
                     return true
                 }
                 KeyEvent.KEYCODE_VOLUME_MUTE -> {
-                    volumeController.toggleMute(true, AudioManager.STREAM_SYSTEM)
+                    volumeController.toggleMute(true, AudioManager.STREAM_MUSIC)
                     return true
                 }
             }

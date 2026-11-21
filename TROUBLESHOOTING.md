@@ -470,3 +470,15 @@ TogglePrivacyMode misc（ui_session_interface.rs:404），**不本地置选项**
 教训重申：wrapper `echo BUILD_EXIT=%ERRORLEVEL%` 后 `> file 2>&1` 的 Git Bash 调用返回 0 是**假象**，必须读 `dll.log` 的 `BUILD_EXIT=`/`error[` 才是真判据（本轮首次「成功」即被 dll.log 打脸）。
 
 产物：主机 DLL `1BE43068`（36,243,968 B，4m37s）已部署并 02:29:39 重启服务无 panic；APK `78466A18`（29,293,498 B，175.9s，02:25）；主机测试包 02:29 版 `FD973798`（34,211,636 B）。部署遇两个 RustDesk.exe 界面进程（7016/11984）锁 `librustdesk.dll`——`Stop-Service` 不杀 GUI，需先 `Stop-Process` 这两个再拷 DLL（本机流程，经用户确认）。
+
+## 案例：03:22 四项 UI/行为修正（纯客户端，DLL 不变）
+
+**音量键调到「别的东西」**：上一轮在 `MainActivity.dispatchKeyEvent` 拦 `KEYCODE_VOLUME_*` 后调 `VolumeController`，但用的是 `AudioManager.STREAM_SYSTEM`（系统/通知流）。媒体播放走的是 `STREAM_MUSIC`，于是用户按音量键「确实动了某个音量、但外放/视频音量没变」。修：`raiseVolume/lowerVolume/toggleMute` 三处 `STREAM_SYSTEM`→`STREAM_MUSIC`。教训：音量键「有没有反应」不等于「控对了流」，Android 多音频流要按用途选 `STREAM_*`。
+
+**二级菜单压住一级菜单（透明重叠）**：「操作」卡里 `keyMapEnabled` 的展开用外层 `AnimatedSize(Align heightFactor)`，而展开体 `_keymapExpanded` 内「其他设置」又嵌一个 `AnimatedSize(Align heightFactor)`。嵌套时外层 `AnimatedSize` 在子高变化帧里缓存到的是内层「动画中途」的小高度，于是外层只让出中途高度、内层内容却继续长到最终高度，溢出画到下方的「操作方式/屏幕触控/鼠标指针」行上（看着像半透明叠字）。修：删内层 `AnimatedSize`，「其他设置」展开体改普通 `if (moreOpen) _sliderRow(...)` 条件渲染——内层高度瞬时变化，外层单个 `AnimatedSize` 在同一帧测到真实最终高度，动画正常、不溢出。教训：**AnimatedSize 不要套 AnimatedSize**；需要「折叠里再折叠」时只保留一层动画，内层用条件渲染。
+
+**抽屉太宽**：`_drawer` 宽度 `min(430, (屏宽-72)*0.6)` 在大屏上恒取 430 逻辑 px，相对 UU 实机侧栏（约 23% 屏宽）明显偏宽。对照 `uu远程素材/原生素材` 的横屏截图量得侧栏≈屏宽 23%、右缘图标列≈15%，把上限降到 `min(300, (屏宽-72)*0.6)`。教训：复刻第三方 App 的「比例」要拿实机截图按屏宽百分比量，别凭逻辑像素拍脑袋定上限。
+
+**「外设」空壳分组**：按键映射迁入「操作」卡就地展开后，外设组只剩「手势与触摸」一行，折叠一层纯属多余。撤掉 `_groupCard('外设',…)`，把该行改回普通 `_card(_navRow(...))` 直接呈现，删 `_peripheralRows()`。教训：IA 重构后回看每个分组是否还有 ≥2 项，单项折叠卡应平铺掉。
+
+产物：APK `ee75e3c3`（29,293,324 B，167.3s，03:22）；本轮全在 Dart/Kotlin，主机 DLL 仍 `1BE43068`、主机包仍 `FD973798` 不重编不重打，真机只需装新 APK。

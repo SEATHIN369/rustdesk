@@ -32,7 +32,7 @@ class UuChrome extends StatefulWidget {
   State<UuChrome> createState() => _UuChromeState();
 }
 
-class _UuChromeState extends State<UuChrome> {
+class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   static const _imageQualityLabels = {
     kRemoteImageQualityBest: '清晰',
     kRemoteImageQualityBalanced: '平衡',
@@ -48,9 +48,15 @@ class _UuChromeState extends State<UuChrome> {
   Timer? _mutePendingTimer;
   bool? _privacyPendingOn;
   bool _privacyPreplugged = false;
+  // True while auto-recovering privacy after reconnect: a display commit
+  // rejected at the lock screen must not flip the switch off, so the tile
+  // keeps showing on until the host is unlocked and privacy commits.
+  bool _privacyAutoRecovering = false;
   bool _mutePending = false;
   Worker? _privacyWorker;
   Worker? _railWorker;
+  Worker? _hostStateWorker;
+  Worker? _peerReadyWorker;
   bool _faded = false;
   final Set<String> _expanded = {};
   String? _imageQuality;
@@ -73,16 +79,37 @@ class _UuChromeState extends State<UuChrome> {
     });
     _loadKeyboardMode();
     _loadImageQuality();
-    _privacyWorker = ever(PrivacyModeState.find(widget.id), (String _) {
+    _privacyWorker = ever(PrivacyModeState.find(widget.id), (String state) {
       if (!mounted || _privacyPendingOn == null) return;
       _privacyStartTimer?.cancel();
       _privacyRetryTimer?.cancel();
       _privacyFailTimer?.cancel();
+      if (state.isNotEmpty) _privacyAutoRecovering = false;
       setState(() => _privacyPendingOn = null);
     });
     _migrateScaleDefault();
     _restorePrivacyIntent();
     _poke();
+    WidgetsBinding.instance.addObserver(this);
+    _hostStateWorker = ever(uuState.hostStateVersion, (_) {
+      if (mounted) setState(() {});
+    });
+    _peerReadyWorker = ever(gFFI.ffiModel.pi.isSet, (bool set) {
+      if (set) _queryHostMute();
+    });
+    if (gFFI.ffiModel.pi.isSet.value) _queryHostMute();
+  }
+
+  // Pull the host's real mute state on connect and on foreground resume; the
+  // user may have toggled Windows mute directly while the app was away.
+  void _queryHostMute() {
+    if (!mounted || !_hostControlSupported) return;
+    _sendHostCmd('mute?', true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _queryHostMute();
   }
 
   // 125% is the default for the virtual display: a 1080p/1k stream is
@@ -106,12 +133,24 @@ class _UuChromeState extends State<UuChrome> {
   // display commits are rejected while the host sits at the lock screen, so
   // keep retrying until the session is back and the intent still stands.
   void _restorePrivacyIntent() {
-    var tries = 0;
+    if (!_hostIntent('privacy')) return;
+    _privacyAutoRecovering = true;
+    // Time budget rather than a try count: the host may sit at the lock screen
+    // for ~25 s before auto-unlock lands, and the 2 s/4 s chains burned a fixed
+    // 20-try budget long before then.
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
     void attempt() {
-      if (!mounted || tries >= 20) return;
-      tries++;
-      if (!_hostIntent('privacy')) return;
-      if (PrivacyModeState.find(widget.id).value.isNotEmpty) return;
+      if (!mounted) return;
+      if (!_hostIntent('privacy') ||
+          PrivacyModeState.find(widget.id).value.isNotEmpty) {
+        _privacyAutoRecovering = false;
+        return;
+      }
+      if (DateTime.now().isAfter(deadline)) {
+        _privacyAutoRecovering = false;
+        setState(() => _privacyPendingOn = null);
+        return;
+      }
       if (_privacyPendingOn != null) {
         Timer(const Duration(seconds: 2), attempt);
         return;
@@ -138,6 +177,9 @@ class _UuChromeState extends State<UuChrome> {
     _mutePendingTimer?.cancel();
     _privacyWorker?.dispose();
     _railWorker?.dispose();
+    _hostStateWorker?.dispose();
+    _peerReadyWorker?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -198,7 +240,7 @@ class _UuChromeState extends State<UuChrome> {
         sessionId: gFFI.sessionId, implKey: 'uu:$cmd', on: on);
   }
 
-  String _hostIntentKey(String name) => 'uu-host-$name:${widget.id}';
+  String _hostIntentKey(String name) => uuHostIntentKey(name, widget.id);
 
   bool _hostIntent(String name, {bool fallback = false}) {
     final raw = bind.mainGetLocalOption(key: _hostIntentKey(name));
@@ -307,9 +349,12 @@ class _UuChromeState extends State<UuChrome> {
     _privacyFailTimer = Timer(Duration(seconds: auto ? 8 : 20), () {
       if (!mounted || _privacyPendingOn != true) return;
       if (PrivacyModeState.find(widget.id).value.isEmpty) {
-        // An auto retry keeps the intent and tries again once the host is
-        // past its lock screen, so leave the virtual display plugged.
-        if (!auto && preplug && !hadVirtualDisplay) {
+        if (auto) {
+          // A commit rejected at the lock screen may leave the virtual display
+          // unplugged; allow the next round to pre-plug again. Keep the intent
+          // and the switch on (_privacyAutoRecovering) until the host unlocks.
+          _privacyPreplugged = false;
+        } else if (preplug && !hadVirtualDisplay) {
           bind.sessionToggleVirtualDisplay(
               sessionId: gFFI.sessionId, index: 0, on: false);
           _privacyPreplugged = false;
@@ -874,21 +919,21 @@ class _UuChromeState extends State<UuChrome> {
         uuState.active.snapZoom = v;
       }, subtitle: '松手后吸附到适应/原始比例'),
     ];
-    if (!gFFI.ffiModel.isPeerAndroid &&
+    if (gFFI.ffiModel.touchMode &&
+        !gFFI.ffiModel.isPeerAndroid &&
         !gFFI.canvasModel.cursorEmbedded &&
         !pi.isWayland) {
+      // Pointer mode always draws a single host cursor, so this opt-in only
+      // matters in touch mode, where it overrides the default hide that avoids
+      // a second lagging cursor over the finger indicator.
       rows.add(Obx(() {
-        final state = ShowRemoteCursorState.find(widget.id);
         final lock = ShowRemoteCursorLockState.find(widget.id);
-        return _toggleRow('显示远端光标', state.value, (v) async {
-          await bind.sessionToggleOption(
-              sessionId: gFFI.sessionId, value: 'show-remote-cursor');
-          state.value = bind.sessionGetToggleOptionSync(
-              sessionId: gFFI.sessionId, arg: 'show-remote-cursor');
-          uuState.showRemoteCursor.value = state.value;
+        return _toggleRow('显示远端光标', uuState.showRemoteCursor.value, (v) {
+          uuState.showRemoteCursor.value = v;
         },
-            subtitle:
-                gFFI.ffiModel.viewOnly || lock.value ? '当前模式下不可用' : null,
+            subtitle: gFFI.ffiModel.viewOnly || lock.value
+                ? '当前模式下不可用'
+                : '触控模式默认隐藏，避免与手指指示重影',
             enabled: !gFFI.ffiModel.viewOnly && !lock.value);
       }));
     }
@@ -947,6 +992,7 @@ class _UuChromeState extends State<UuChrome> {
         return _PrivacyModeTile(
           on: on,
           pending: _privacyPendingOn,
+          recovering: _privacyAutoRecovering && _hostIntent('privacy'),
           supported: _privacySupported(),
           onChanged: _togglePrivacy,
         );
@@ -1341,12 +1387,14 @@ class _UuChromeState extends State<UuChrome> {
 class _PrivacyModeTile extends StatelessWidget {
   final bool on;
   final bool? pending;
+  final bool recovering;
   final bool supported;
   final ValueChanged<bool> onChanged;
 
   const _PrivacyModeTile({
     required this.on,
     required this.pending,
+    required this.recovering,
     required this.supported,
     required this.onChanged,
   });
@@ -1365,18 +1413,21 @@ class _PrivacyModeTile extends StatelessWidget {
             Text(pending! ? '正在开启…' : '正在关闭…',
                 style: const TextStyle(color: Colors.white54, fontSize: 11)),
           ])
-        : supported
-            ? const Text('断开物理显示器，画面切到虚拟屏',
-                style: TextStyle(color: Colors.white38, fontSize: 11))
-            : const Text('需被控端安装并以服务运行官方 RustDesk',
-                style: TextStyle(color: Colors.white38, fontSize: 11));
+        : recovering
+            ? const Text('等待被控端解锁后自动开启',
+                style: TextStyle(color: Colors.white54, fontSize: 11))
+            : supported
+                ? const Text('断开物理显示器，画面切到虚拟屏',
+                    style: TextStyle(color: Colors.white38, fontSize: 11))
+                : const Text('需被控端安装并以服务运行官方 RustDesk',
+                    style: TextStyle(color: Colors.white38, fontSize: 11));
     return SwitchListTile(
       dense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       title: const Text('操控时物理关屏（虚拟屏防窥）',
           style: TextStyle(color: Colors.white, fontSize: 13)),
       subtitle: subtitle,
-      value: pending ?? on,
+      value: pending ?? (recovering || on),
       onChanged: onChanged,
     );
   }

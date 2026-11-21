@@ -129,7 +129,7 @@ fn set_system_mute(_mute: bool) -> hbb_common::ResultType<()> {
 }
 
 #[cfg(windows)]
-fn system_is_muted() -> Option<bool> {
+pub fn system_is_muted() -> Option<bool> {
     use windows::core::GUID;
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{eMultimedia, eRender, MMDeviceEnumerator};
@@ -323,10 +323,9 @@ lazy_static::lazy_static! {
     static ref PRIVACY_DISPLAY: Mutex<Option<String>> = Mutex::new(None);
 }
 
-/// Called once privacy mode committed its display layout. A fresh virtual
-/// display comes up at Windows' recommended scale, where the user's stored
-/// choice is applied; a scale the user picked in Settings is kept and mirrored
-/// into our own state.
+/// Called once privacy mode committed its display layout. The phone's stored
+/// scale is authoritative: Windows restores a manual Settings scale on hotplug,
+/// which must not override the user's intent, so it is always applied here.
 pub fn on_privacy_display_ready(device: &str) {
     let device = device.trim_end_matches('\0');
     *PRIVACY_DISPLAY.lock().unwrap() = Some(device.to_owned());
@@ -343,19 +342,23 @@ pub fn on_privacy_display_ready(device: &str) {
         hbb_common::log::warn!("Virtual display {device} not found; DPI scale not applied");
         return;
     };
-    if cur == recommended {
-        if stored == cur {
-            hbb_common::log::info!("Virtual display DPI already at {cur}%");
-        } else if let Err(e) = dpi_scale::set(device, stored) {
-            hbb_common::log::error!("Failed to set virtual display DPI {stored}%: {e}");
-        } else {
+    if stored == cur {
+        hbb_common::log::info!("Virtual display DPI already at {cur}%");
+        return;
+    }
+    if let Err(e) = dpi_scale::set(device, stored) {
+        hbb_common::log::error!("Failed to set virtual display DPI {stored}%: {e}");
+        return;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    match dpi_scale::get(device) {
+        Some((actual, _)) if actual == stored => {
             hbb_common::log::info!("Virtual display DPI set to {stored}% (was {cur}%)");
         }
-    } else {
-        with_state(|s| s.dpi_scale = cur);
-        hbb_common::log::info!(
-            "Virtual display DPI kept at Windows setting {cur}% (recommended {recommended}%)"
-        );
+        Some((actual, _)) => hbb_common::log::warn!(
+            "Virtual display DPI clamped to {actual}% (requested {stored}%, recommended {recommended}%)"
+        ),
+        None => hbb_common::log::warn!("Virtual display DPI readback failed after setting {stored}%"),
     }
 }
 

@@ -238,8 +238,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       }
       _disableAndroidSoftKeyboard(
           isKeyboardVisible: keyboardVisibilityController.isVisible);
-      uuState.showRemoteCursor.value = bind.sessionGetToggleOptionSync(
-          sessionId: sessionId, arg: 'show-remote-cursor');
+      // Always let the host stream cursor position. Painting is gated per mode
+      // below: pointer mode draws a single cursor (the local system cursor is
+      // hidden), touch mode hides it by default to avoid a second lagging
+      // cursor over the finger. showRemoteCursor is only the touch-mode override.
+      if (!bind.sessionGetToggleOptionSync(
+          sessionId: sessionId, arg: 'show-remote-cursor')) {
+        bind.sessionToggleOption(
+            sessionId: sessionId, value: 'show-remote-cursor');
+      }
+      uuState.showRemoteCursor.value = false;
       // Seed shortcut action callbacks once the session is ready, so that
       // global keyboard shortcuts work even if the user never opens the
       // toolbar menu. The returned list is intentionally discarded — the
@@ -564,7 +572,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           sessionId: sid,
           implKey: 'uu:unlock:${base64Encode(utf8.encode(pwd))}',
           on: true);
-      showToast('已尝试自动解锁，失败请手动输入');
     } else {
       // Per-char inputKey goes through the legacy Chr path; the lock screen
       // only reliably accepts the sequence path used by manual IME typing.
@@ -845,12 +852,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ];
           if (showCursorPaint) {
-            // Upstream mobile always paints the remote cursor; that shows a
-            // second cursor trailing the local pointer. Only paint it when
-            // the user explicitly enables it.
-            paints.add(Obx(() => uuState.showRemoteCursor.value
-                ? CursorPaint(widget.id)
-                : const SizedBox.shrink()));
+            // Pointer mode hides the local system cursor, so painting the host
+            // cursor yields a single cursor with no ghosting. Touch mode keeps a
+            // local finger indicator, so the lagging host cursor stays hidden by
+            // default (showRemoteCursor is the opt-in override) to avoid two.
+            final pointerMode = !gFFI.ffiModel.touchMode;
+            paints.add(Obx(() =>
+                (pointerMode || uuState.showRemoteCursor.value)
+                    ? CursorPaint(widget.id)
+                    : const SizedBox.shrink()));
           }
           if (gFFI.ffiModel.touchMode) {
             paints.add(FloatingMouse(

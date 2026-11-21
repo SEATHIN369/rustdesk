@@ -272,8 +272,52 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 - 判定改回 `char[] + _stricmp`，状态细分 0/1/2/-1 并把桌面名写进日志；
 - 收到命令后最多轮询 12s 等锁屏出现（服务刚切桌面时瞬时判 0 不算失败）；
 - 注入前 tap VK_SHIFT 唤醒锁屏；
-- 手机端防窥意图在解锁后自动重试（auto 模式 8s 一轮、失败不弹提示、最多 20 轮），
-  并用 `_privacyPreplugged` 避免重复预插。
+- 手机端防窥意图在解锁后自动重试（auto 模式失败不弹提示，时间预算约 60s，期间开关保持开启不跳关），
+  并用 `_privacyPreplugged` 避免重复预插（auto 失败会重置它以便下轮按需重新预插）。
 
 经验：一个「看起来像逻辑 bug」的问题，实际是编码假设错误 + 系统限制两件事叠加。
 先取证、再拆状态、再对齐时间线，三步走完根因自己会跳出来。
+
+## 案例：真机五问题（解锁慢 / 防窥跳关 / 看不到光标 / 静音失同步 / 缩放不生效）
+
+22:26 主机包 + 22:20 APK 真机复测后用户报五个问题。读主机运行日志 + 代码取证，根因各自坐实：
+
+1. **解锁等待太长**：`auto_unlock.rs` 每次失败 attempt 要空等满 `UNLOCK_WAIT=4s` 才判失败。
+   日志：attempt 1 注入 → 4s 后才放弃，attempt 2 仅 ~122ms 就成功。
+   修：`UNLOCK_WAIT` 4s→2s，唤醒 settle 300→200ms、退格 settle 200→150ms。
+   成功离开 Winlogon 实测 ~120ms，2s 足够；最坏空等从 ~13.5s 降到 ~6s。检测窗 12s 保留。
+2. **解锁后防窥开关被关**：手机端在还锁屏时就抢着开防窥 → Winlogon 拒绝 display commit →
+   `PrvOnFailed` → `_privacyWorker` 立刻清 `_privacyPendingOn` → 开关跳「关」；
+   旧 `_restorePrivacyIntent` 20 次计数预算被 2s/4s 双链快速耗尽。
+   修：加 `_privacyAutoRecovering` 标志，恢复期间即便 pending 清空、state 为空，tile 仍显示 ON
+   （`value: pending ?? (recovering || on)`）；预算改 60s 时间基；auto 失败重置 `_privacyPreplugged`。
+   手动路径完全不变。
+3. **手机看不到光标**（用户纠正：当初默认关是因为画了两个光标有重影）：
+   重影只发生在触控模式（本地手指指示 + 滞后远端光标）；指针模式本地系统光标隐藏
+   （`SystemMouseCursors.none`），画远端光标只有一个。旧代码全局默认 `showRemoteCursor=false`
+   把指针模式也关了 → 完全无光标。另：光标位置来自主机 NAME_POS，仅 `show_remote_cursor` 开时订阅。
+   修：按模式区分——绘制门 `!touchMode || showRemoteCursor`（指针恒画、触控仅手动开）；
+   首帧强制 `show-remote-cursor=Y` 让主机发位置；`showRemoteCursor` 语义改为触控覆盖（默认 false 不变）；
+   「显示远端光标」开关仅触控模式可见。**不是**一刀切默认开。
+4. **静音状态失同步**：手机纯本地 bool 缓存，主机 `set_system_mute` fire-and-forget 无上报；
+   用户手动改 Windows 静音 → 手机显示与实际不符。修（用户拍板轻量方案）：仅连接 / 回前台查询，
+   主机 `mute?` 读 `system_is_muted()` 回聊天 `uu:mute-state:<0/1>`，Dart 拦截刷新。不做持续监听。
+5. **缩放不生效**：`on_privacy_display_ready` 只要 `cur != recommended` 就走 else 用 Windows 当前值
+   **覆盖**手机存的 `dpi_scale`（日志 `kept at Windows setting 125% (recommended 100%)`）。
+   Windows 热插拔按注册表恢复手动缩放 → 用户手动改过一次后 `uu:scale` 永远被丢弃。
+   修：始终套用存储值（权威意图）＋ set 后回读校验，被 clamp/失败记 warn；删 else 覆盖分支。
+
+**硬约束（反向通道）**：Android 复用官方 1.5.3 `librustdesk.so`，`src/client/*` 改不动。
+主机→手机唯一干净带字符串载荷的反向通道是**聊天消息**：主机发 `Misc.chat_message` →
+官方 .so 转 `chat_client_mode` 事件 → Dart `model.dart` 在此加薄钩子拦截 `uu:` 前缀（不进 chatModel、
+不计未读、不响铃）。`back_notification.privacy_mode_state` **不可用**：官方 .so 会弹 Privacy mode 框
+＋改写 privacy-mode 选项，污染隐私状态。零新协议。
+
+**构建坑（这次踩到）**：Git Bash 里 `cmd.exe /c "build.bat"` 的 `/c` 会被 MSYS 路径转换吃掉，
+cmd 进交互壳即 EOF 退出，bat 根本没跑——任务通知还报 exit 0。靠核对产物 mtime 抓出来
+（dll.log/APK 全是旧时间戳，stdout 只有 cmd 横幅没有 BUILD_EXIT）。
+修：`MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe /c "..."`。
+教训：后台构建报成功前必须读产物新 mtime＋日志 `Finished`/`✓ Built`＋BUILD_EXIT，别信 wrapper 退出码。
+
+产物：DLL `E047F868`（36,245,504 B，4m22s）部署＋服务重启核实运行期；APK `83517080`（29,291,364 B）；
+主机测试包 23:35 版 `21CDA2A0`。五项均待真机复测。

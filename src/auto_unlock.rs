@@ -42,7 +42,9 @@ fn run(password: &str) -> String {
     use crate::platform::windows;
 
     const ATTEMPTS: u32 = 3;
-    const UNLOCK_WAIT: Duration = Duration::from_secs(4);
+    // Leaving Winlogon after a correct password takes ~120 ms in practice; 2 s is
+    // a safe ceiling while halving the dead wait on a failed attempt.
+    const UNLOCK_WAIT: Duration = Duration::from_secs(2);
     // The client asks right after the first frame; the lock can land a moment
     // later (or Winlogon can still be settling), so poll before giving up.
     const LOCK_DETECT_WAIT: Duration = Duration::from_secs(12);
@@ -74,12 +76,12 @@ fn run(password: &str) -> String {
         if attempt > 1 {
             // A failed attempt may have left a partial password in the field.
             windows::inject_backspaces(units.len() + 16);
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(150));
         } else {
             // The lock screen swallows the first keystroke while dismissing
             // its overlay, so wake it with a harmless modifier tap.
             windows::inject_wake_tap();
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_millis(200));
         }
         let sent = windows::inject_unicode_text(&units);
         windows::inject_enter();

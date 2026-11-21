@@ -15,6 +15,10 @@ const double kUuKeyboardSheetFraction = 0.52;
 // collapses to this strip and floats right above the system keyboard.
 const double kUuTabStripHeight = 44;
 
+// Per-peer persisted host-control intent/setting key, shared by the chrome and
+// the reverse-channel handler so the format lives in one place.
+String uuHostIntentKey(String name, String id) => 'uu-host-$name:$id';
+
 class UuFloatingKey {
   String id;
   String key;
@@ -164,9 +168,25 @@ class UuState {
   // keyboard-visibility callback has no observable of its own, so mirror it
   // here to rebuild the tap-outside barrier.
   final imeVisible = false.obs;
-  // Paint the remote cursor inside the video. Upstream mobile always draws
-  // it, which shows a second cursor lagging behind the local pointer.
+  // Touch-mode override for painting the remote cursor inside the video.
+  // Pointer mode always paints a single host cursor (the local system cursor is
+  // hidden); touch mode hides it by default to avoid a second lagging cursor
+  // over the finger indicator, and this flag opts back in.
   final showRemoteCursor = false.obs;
+  // Bumped when the host reports state over the reverse chat channel so the
+  // chrome (which reads persisted intents non-reactively) rebuilds.
+  final hostStateVersion = 0.obs;
+
+  // Thin reverse-channel hook: the official client .so forwards host chat
+  // messages here. Only "uu:" payloads are consumed; normal chat is unaffected.
+  void handleHostMessage(String peerId, String text) {
+    if (text.startsWith('uu:mute-state:')) {
+      final muted = text.substring('uu:mute-state:'.length) == '1';
+      bind.mainSetLocalOption(
+          key: uuHostIntentKey('mute', peerId), value: muted ? '1' : '0');
+      hostStateVersion.value++;
+    }
+  }
 
   UuScheme get active {
     final name = activeName.value;

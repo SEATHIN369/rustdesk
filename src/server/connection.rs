@@ -4824,7 +4824,21 @@ impl Connection {
         #[cfg(windows)]
         if let Some(cmd) = t.impl_key.strip_prefix("uu:") {
             if self.is_authed_remote_conn() {
-                crate::host_controls::handle_command(cmd, t.on);
+                if cmd == "mute?" {
+                    // The official client .so forwards chat messages to Dart, so
+                    // this is the only clean reverse channel for host state.
+                    let muted = crate::host_controls::system_is_muted().unwrap_or(false);
+                    let mut misc = Misc::new();
+                    misc.set_chat_message(ChatMessage {
+                        text: format!("uu:mute-state:{}", if muted { 1 } else { 0 }),
+                        ..Default::default()
+                    });
+                    let mut msg_out = Message::new();
+                    msg_out.set_misc(misc);
+                    self.send(msg_out).await;
+                } else {
+                    crate::host_controls::handle_command(cmd, t.on);
+                }
             }
             return;
         }

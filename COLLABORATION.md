@@ -112,7 +112,7 @@ flutter build apk --release --target-platform android-arm64
 |---|---|---|---|
 | A（kitsuneMori96） | 横屏方向翻转、自动解锁改 Seq 通道、防窥预插虚拟屏、静音文案澄清 | `remote_page.dart`、`uu_chrome.dart` | 已提交 80861b9，待真机验证 |
 | A | 打包、构建笔记、被控端日志排查 | — | 进行中 |
-| B（协作者） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart`（必要时 `gestures.dart`） | 待开工，分支 `feat/gesture-intent` |
+| B（SEA369） | **手势引擎重构**：滚动/缩放意图判定 + 动态灵敏度（见 8.1、8.2） | `common/widgets/remote_input.dart`（必要时 `gestures.dart`） | 待开工，分支 `feat/gesture-intent` |
 | B | **操作页信息架构重构**（见 8.3） | `mobile/pages/uu_chrome.dart` 的 `_menuPage` / `_settingsPage` | 待开工，分支 `refactor/action-drawer` |
 
 分工边界：A 不碰 `remote_input.dart`，B 不改防窥/自动解锁逻辑；两边都要动 `uu_chrome.dart` 时先在 issue 里对齐。

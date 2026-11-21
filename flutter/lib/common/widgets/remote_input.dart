@@ -661,7 +661,9 @@ class _RawTouchGestureDetectorRegionState
       pxPerNotch = _kScrollSlowPxPerNotch +
           t * (_kScrollMidPxPerNotch - _kScrollSlowPxPerNotch);
     }
-    _mouseScrollIntegral += dy / pxPerNotch;
+    final sensitivity =
+        uuState.active.scrollSensitivity.clamp(0.5, 2.0).toDouble();
+    _mouseScrollIntegral += dy * sensitivity / pxPerNotch;
     final notches = _mouseScrollIntegral.truncate();
     if (notches == 0) return;
     final clamped = notches.clamp(-2, 2).toInt();
@@ -757,7 +759,7 @@ class _RawTouchGestureDetectorRegionState
       _cancelTwoFingerIntent();
       if (_twoFingerCanvasChanged) {
         _twoFingerCanvasChanged = false;
-        ffi.canvasModel.snapCanvas();
+        if (uuState.active.snapZoom) ffi.canvasModel.snapCanvas();
       }
       // No idea why we need to set the view style to "" here.
       // bind.sessionSetViewStyle(sessionId: sessionId, value: "");

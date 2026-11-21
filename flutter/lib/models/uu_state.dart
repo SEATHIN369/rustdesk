@@ -91,6 +91,8 @@ class UuScheme {
   bool haptics;
   bool pinchZoom;
   bool comboLatch;
+  double scrollSensitivity;
+  bool snapZoom;
 
   UuScheme({
     required this.name,
@@ -100,6 +102,8 @@ class UuScheme {
     this.haptics = true,
     this.pinchZoom = true,
     this.comboLatch = true,
+    this.scrollSensitivity = 1.0,
+    this.snapZoom = true,
   }) : keys = keys ?? [];
 
   Map<String, dynamic> toJson() => {
@@ -110,6 +114,8 @@ class UuScheme {
         'haptics': haptics,
         'pinchZoom': pinchZoom,
         'comboLatch': comboLatch,
+        'scrollSensitivity': scrollSensitivity,
+        'snapZoom': snapZoom,
       };
 
   factory UuScheme.fromJson(Map<String, dynamic> json) => UuScheme(
@@ -123,6 +129,11 @@ class UuScheme {
         haptics: json['haptics'] != false,
         pinchZoom: json['pinchZoom'] != false,
         comboLatch: json['comboLatch'] != false,
+        scrollSensitivity:
+            ((json['scrollSensitivity'] as num?)?.toDouble() ?? 1.0)
+                .clamp(0.5, 2.0)
+                .toDouble(),
+        snapZoom: json['snapZoom'] != false,
       );
 }
 
@@ -146,7 +157,7 @@ class UuState {
   // Normalized position of the idle edge button (draggable, persisted).
   double railX = 0.97;
   double railY = 0.5;
-  // null = closed, otherwise 'menu' / 'schemes' / 'settings'
+  // null = closed, otherwise 'menu' / 'schemes' / 'gestures'
   final drawerPage = RxnString();
   final editLayout = false.obs;
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 
 import 'platform_model.dart';
@@ -182,7 +183,20 @@ class UuState {
   final privacyFailureSeq = 0.obs;
   final RxnString privacyFailureText = RxnString();
   // A remote-page chrome is on screen and handles privacy failures itself.
+  // Counted: the page can briefly mount the new chrome before disposing the
+  // old one, and a stale dispose must not clear the flag for the live chrome.
   bool privacyChromeMounted = false;
+  int _privacyChromes = 0;
+
+  void chromeMounted() {
+    _privacyChromes++;
+    privacyChromeMounted = true;
+  }
+
+  void chromeDisposed() {
+    if (_privacyChromes > 0) _privacyChromes--;
+    privacyChromeMounted = _privacyChromes > 0;
+  }
 
   void reportHostPrivacyFailure(String text) {
     privacyFailureText.value = text;
@@ -202,10 +216,12 @@ class UuState {
           key: uuHostIntentKey('mute', peerId), value: muted ? '1' : '0');
       hostStateVersion.value++;
     } else if (text.startsWith('uu:lock-state:')) {
+      debugPrint('[uu-diag] host msg "$text" peer=$peerId');
       hostLockState.value =
           int.tryParse(text.substring('uu:lock-state:'.length));
       hostStateVersion.value++;
     } else if (text.startsWith('uu:unlock-state:')) {
+      debugPrint('[uu-diag] host msg "$text" peer=$peerId');
       hostUnlockState.value = text.substring('uu:unlock-state:'.length);
       hostStateVersion.value++;
     }

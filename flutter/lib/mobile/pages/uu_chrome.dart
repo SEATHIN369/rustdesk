@@ -84,9 +84,20 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   // card, so it never collides with a _groupCard title sharing _expanded.
   static const String _kKeymapMoreKey = 'op-keymap-more';
 
+  // Diagnostic trace for the privacy state machine: sessions can be rebuilt
+  // while a restore is in flight, so every line carries the instance id and
+  // the live session id to tell which chrome acted.
+  void _diag(String msg) =>
+      debugPrint('[uu-diag] chrome#$hashCode sid=${gFFI.sessionId} $msg');
+
+  String get _privacyFlags =>
+      'pending=$_privacyPendingOn await=$_privacyAwaitUnlock commit=$_privacyCommitted '
+      'zero=$_privacyZeroSeen fails=$_privacyHostFails retries=$_privacyProbeRetries auto=$_privacyAuto';
+
   @override
   void initState() {
     super.initState();
+    _diag('init peer=${widget.id} intent=${_hostIntent('privacy')}');
     _railWorker = ever(uuState.railOpen, (bool open) {
       _hideTimer?.cancel();
       if (open) {
@@ -99,9 +110,16 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     });
     _loadImageQuality();
     _privacyWorker = ever(PrivacyModeState.find(widget.id), (String state) {
-      debugPrint(
-          '[uu-diag] PrivacyModeState changed peer=${widget.id} state="$state" pending=$_privacyPendingOn');
+      _diag('PrivacyModeState "$state" $_privacyFlags');
       if (!mounted || _privacyPendingOn == null) return;
+      if (state.isEmpty && _privacyPendingOn == true) {
+        // A rejected ON echoes an empty impl key before/around the failure
+        // event. Keep the pending flow alive so the failure handler can
+        // re-probe the lock state and retry once the host unlocks; clearing
+        // here used to kill the retry and surface a toast immediately.
+        _diag('empty echo while pending ON -> keep flow');
+        return;
+      }
       _privacyStartTimer?.cancel();
       _privacyRetryTimer?.cancel();
       _privacyFailTimer?.cancel();
@@ -126,7 +144,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _lockWorker = ever(uuState.hostLockState, (int? s) => _onLockState(s));
     _unlockWorker =
         ever(uuState.hostUnlockState, (String? st) => _onUnlockState(st));
-    uuState.privacyChromeMounted = true;
+    uuState.chromeMounted();
     _privacyFailWorker = ever(
         uuState.privacyFailureSeq, (_) => _onPrivacyHostFailure());
     _peerReadyWorker = ever(gFFI.ffiModel.pi.isSet, (bool set) {
@@ -153,33 +171,42 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   // keep retrying until the session is back and the intent still stands.
   void _restorePrivacyIntent() {
     if (!_hostIntent('privacy')) return;
+    _diag('restore start');
     _privacyAutoRecovering = true;
     // Time budget rather than a try count: the host may sit at the lock screen
     // for ~25 s before auto-unlock lands, and the 2 s/4 s chains burned a fixed
     // 20-try budget long before then.
     final deadline = DateTime.now().add(const Duration(seconds: 60));
+    var tries = 0;
     void attempt() {
       if (!mounted) return;
       if (!_hostIntent('privacy') ||
           PrivacyModeState.find(widget.id).value.isNotEmpty) {
+        _diag('restore stop: intent=${_hostIntent('privacy')} '
+            'state="${PrivacyModeState.find(widget.id).value}" $_privacyFlags');
         _privacyAutoRecovering = false;
         return;
       }
       if (DateTime.now().isAfter(deadline)) {
+        _diag('restore deadline hit $_privacyFlags');
         _privacyAutoRecovering = false;
         setState(() => _privacyPendingOn = null);
         return;
       }
       if (_privacyPendingOn != null) {
+        _diag('restore try#$tries wait (pending non-null) $_privacyFlags');
         Timer(const Duration(seconds: 2), attempt);
         return;
       }
       if (_privacySupported()) {
+        _diag('restore try#$tries -> toggle ON '
+            'state="${PrivacyModeState.find(widget.id).value}" $_privacyFlags');
         _togglePrivacy(true, auto: true);
         Timer(const Duration(seconds: 4), attempt);
         return;
       }
       // Peer info can arrive a few seconds after the page is built.
+      _diag('restore try#$tries unsupported yet');
       Timer(const Duration(seconds: 3), attempt);
     }
 
@@ -188,6 +215,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _diag('dispose $_privacyFlags');
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
     _privacyStartTimer?.cancel();
@@ -204,7 +232,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _unlockWorker?.dispose();
     _privacyFailWorker?.dispose();
     _privacyHostFailTimer?.cancel();
-    uuState.privacyChromeMounted = false;
+    uuState.chromeDisposed();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -307,13 +335,18 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   // `on` is the user's intent, persisted per peer: the host always restores
   // the physical screen on disconnect, so a new session re-applies it.
   void _togglePrivacy(bool next, {bool auto = false}) {
+    final cur = PrivacyModeState.find(widget.id).value.isNotEmpty;
+    _diag('toggle next=$next auto=$auto curState=$cur $_privacyFlags');
     // A pending ON can still be canceled (turning OFF); ignore redundant
     // same-state taps otherwise.
     if (_privacyPendingOn != null && !(_privacyPendingOn == true && !next)) {
+      _diag('toggle ignored (pending in flight)');
       return;
     }
-    final cur = PrivacyModeState.find(widget.id).value.isNotEmpty;
-    if (cur == next) return;
+    if (cur == next) {
+      _diag('toggle ignored (already $next)');
+      return;
+    }
     if (!_privacySupported()) {
       if (!auto) showToast('被控端不支持虚拟屏防窥（需安装版+服务运行）');
       return;
@@ -367,10 +400,13 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 
   void _beginPrivacyProbe() {
     if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
+    _diag('probe send retries=$_privacyProbeRetries');
     _sendHostCmd('lock?', true);
     _privacyProbeTimer = Timer(const Duration(seconds: 3), () {
       if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
       if (uuState.hostLockState.value != null) return; // reply handled it
+      _diag('probe timeout retries=$_privacyProbeRetries '
+          'hostControl=$_hostControlSupported');
       _privacyProbeRetries++;
       if (_privacyProbeRetries < 3) {
         // Reset so an identical reply (e.g. 0 again) still notifies.
@@ -379,6 +415,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       } else if (_hostControlSupported) {
         // The reverse channel exists but never answered. Committing blind is
         // exactly how a lock-screen commit failure happens, so give up here.
+        _diag('probe give up (host control unanswered)');
         _setHostIntent('privacy', false);
         setState(() {
           _privacyCommitted = false;
@@ -390,27 +427,32 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         }
       } else {
         // Old host with no `lock?` reply: legacy direct commit.
+        _diag('probe give up -> legacy commit');
         _commitPrivacyOn();
       }
     });
   }
 
   void _onLockState(int? s) {
-    if (_privacyPendingOn != true || _privacyCommitted) return;
+    if (_privacyPendingOn != true || _privacyCommitted) {
+      return;
+    }
     if (s == null) return; // probe retry handles the no-reply case
-    debugPrint('[uu-diag] lock-state reply s=$s');
+    _diag('lock-state reply s=$s $_privacyFlags');
     _privacyProbeTimer?.cancel();
     if (s == 0) {
       if (!_privacyZeroSeen) {
         // A lock transition can still read as the normal desktop for a moment.
         // Confirm once more after a short settle before committing, otherwise
         // the host gets the request just as Windows locks and rejects it.
+        _diag('lock-state 0 first sample -> confirm in 600ms');
         _privacyZeroSeen = true;
         uuState.hostLockState.value = null;
         _privacyProbeTimer =
             Timer(const Duration(milliseconds: 600), _beginPrivacyProbe);
         return;
       }
+      _diag('lock-state 0 confirmed -> commit');
       _privacyAwaitUnlock = false;
       _commitPrivacyOn();
       return;
@@ -421,6 +463,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     // Windows rejects display commits in these states, so wait and re-probe
     // instead of committing (which would fail and flip the switch off).
     if (_privacyAwaitUnlock) return; // already watching; poll timer decides
+    _diag('lock-state $s -> wait for unlock');
     setState(() => _privacyAwaitUnlock = true);
     _privacyPreplugged = false;
     if (s == 2) _triggerAutoUnlockIfNeeded();
@@ -447,6 +490,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         }
         return;
       }
+      _diag('await watch tick $_privacyFlags');
       _sendHostCmd('lock?', true);
       _privacyAwaitTimer = Timer(const Duration(seconds: 4), tick);
     }
@@ -455,6 +499,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   }
 
   void _onUnlockState(String? st) {
+    _diag('unlock-state reply "$st" $_privacyFlags');
     if (_privacyPendingOn != true || !_privacyAwaitUnlock || _privacyCommitted) {
       return;
     }
@@ -472,10 +517,40 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   // host is not on a confirmed unlocked desktop, fall back to waiting.
   void _onPrivacyHostFailure() {
     if (!mounted) return;
+    final msg = uuState.privacyFailureText.value;
+    _diag('host failure "$msg" $_privacyFlags mounted=$mounted');
     if (_privacyPendingOn != true) {
-      // Not part of our pending flow (e.g. host-side auto restore): surface it.
-      final msg = uuState.privacyFailureText.value;
-      if (msg != null && msg.isNotEmpty) showToast(msg);
+      // The official .so re-applies the persisted privacy option on the first
+      // frame of every reconnect, bypassing our lock probe. If the host was
+      // locked, the commit fails; recover through the gated flow instead of
+      // surfacing an error, as long as the user still wants privacy on.
+      if (_hostIntent('privacy')) {
+        _diag('host failure without pending -> recover via lock probe');
+        _privacyStartTimer?.cancel();
+        _privacyRetryTimer?.cancel();
+        _privacyFailTimer?.cancel();
+        _privacyProbeTimer?.cancel();
+        _privacyAwaitTimer?.cancel();
+        _privacyHostFailTimer?.cancel();
+        setState(() {
+          _privacyPendingOn = true;
+          _privacyAwaitUnlock = false;
+          _privacyCommitted = false;
+          _privacyZeroSeen = false;
+        });
+        _privacyAuto = true;
+        _privacyAutoRecovering = true;
+        _privacyPreplugged = false;
+        _privacyProbeRetries = 0;
+        _privacyHostFails = 0;
+        uuState.hostLockState.value = null;
+        uuState.hostUnlockState.value = null;
+        _beginPrivacyProbe();
+        return;
+      }
+      // No pending flow and no stored intent: nothing to recover, and the
+      // host's raw error is noise (it also fires on every reconnect attempt).
+      _diag('failure ignored (no pending, intent off)');
       return;
     }
     _privacyStartTimer?.cancel();
@@ -490,15 +565,17 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     // Drop the waiting flag so the re-probe can arm the unlock watch again.
     if (_privacyAwaitUnlock) setState(() => _privacyAwaitUnlock = false);
     _privacyHostFails++;
+    _diag('failure re-probe in 800ms fails=$_privacyHostFails');
     if (_privacyHostFails > 2) {
-      final msg = uuState.privacyFailureText.value;
+      _diag('failure give up after $_privacyHostFails');
       _setHostIntent('privacy', false);
+      _privacyAutoRecovering = false;
       setState(() {
         _privacyAwaitUnlock = false;
         _privacyPendingOn = null;
       });
       if (!_privacyAuto) {
-        showToast(msg == null || msg.isEmpty ? '隐私模式操作失败，请稍后重试' : msg);
+        showToast('防窥未能开启，请解锁电脑后再试');
       }
       return;
     }
@@ -515,11 +592,21 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   Future<void> _triggerAutoUnlockIfNeeded() async {
     final sid = gFFI.sessionId;
     final cfg = AutoUnlockConfig.load(widget.id);
-    if (cfg['on'] != true) return;
+    if (cfg['on'] != true) {
+      _diag('auto-unlock skipped (not configured)');
+      return;
+    }
     final additions = gFFI.ffiModel.pi.platformAdditions;
-    if (additions['uu_auto_unlock'] != true) return;
+    if (additions['uu_auto_unlock'] != true) {
+      _diag('auto-unlock skipped (host lacks capability)');
+      return;
+    }
     final pwd = await AutoUnlockConfig.password(cfg);
-    if (pwd == null || pwd.isEmpty || !mounted || gFFI.sessionId != sid) return;
+    if (pwd == null || pwd.isEmpty || !mounted || gFFI.sessionId != sid) {
+      _diag('auto-unlock skipped (no password / session changed)');
+      return;
+    }
+    _diag('auto-unlock request sent');
     bind.sessionTogglePrivacyMode(
         sessionId: sid,
         implKey: 'uu:unlock:${base64Encode(utf8.encode(pwd))}',
@@ -528,6 +615,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
 
   void _commitPrivacyOn() {
     if (!mounted || _privacyPendingOn != true) return;
+    _diag('commit ON preplugged=$_privacyPreplugged '
+        'amyuni=${gFFI.ffiModel.pi.isAmyuniIdd} '
+        'vd=${gFFI.ffiModel.pi.RustDeskVirtualDisplays.length} $_privacyFlags');
     _privacyCommitted = true;
     _privacyProbeTimer?.cancel();
     _privacyAwaitTimer?.cancel();
@@ -550,6 +640,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     }
 
     if (preplug && !hadVirtualDisplay && !_privacyPreplugged) {
+      _diag('commit preplug virtual display, request in 4s');
       _privacyPreplugged = true;
       bind.sessionToggleVirtualDisplay(
           sessionId: gFFI.sessionId, index: 0, on: true);
@@ -560,6 +651,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _privacyRetryTimer = Timer(const Duration(seconds: 12), () {
       if (!mounted || _privacyPendingOn != true) return;
       if (PrivacyModeState.find(widget.id).value.isEmpty) {
+        _diag('12s retry -> requestPrivacy again');
         requestPrivacy();
       }
     });
@@ -567,6 +659,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     // rejection can no longer flip the switch off mid-wait.
     _privacyFailTimer = Timer(Duration(seconds: auto ? 8 : 20), () {
       if (!mounted || _privacyPendingOn != true) return;
+      _diag('fail timer fired state="${PrivacyModeState.find(widget.id).value}" '
+          '(auto=$auto)');
       if (PrivacyModeState.find(widget.id).value.isEmpty) {
         debugPrint(
             '[uu-diag] privacy ON fail-timer fired, state still empty (auto=$auto)');

@@ -990,14 +990,11 @@ class FfiModel with ChangeNotifier {
                       : t == 'Turned off'
                           ? '隐私模式已关闭'
                           : '隐私模式出错，请重试';
-      // A UU chrome page re-probes the lock state before surfacing a failure:
-      // a commit rejected during a lock transition should become "waiting for
-      // unlock" rather than a scary toast.
-      if (uuState.privacyChromeMounted) {
-        uuState.reportHostPrivacyFailure(friendly);
-        return;
-      }
-      showToast(friendly);
+      // Never surface the host's raw privacy error: a commit rejected while
+      // the host is locked is expected and recovered by the UU chrome flow.
+      debugPrint(
+          '[uu-diag] privacy failure forwarded chromeMounted=$uuState.privacyChromeMounted text="$friendly"');
+      uuState.reportHostPrivacyFailure(friendly);
       return;
     } else {
       var hasRetry = evt['hasRetry'] == 'true';

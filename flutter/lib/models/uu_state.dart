@@ -176,6 +176,18 @@ class UuState {
   final RxnInt hostLockState = RxnInt();
   // Host-reported auto-unlock outcome: null / 'success' / 'skipped' / 'failed'.
   final RxnString hostUnlockState = RxnString();
+  // Host-reported privacy-mode failure. The remote-page chrome forwards this
+  // instead of toasting blindly so it can re-check the lock state first: a
+  // display commit rejected mid-lock is a "wait", not a user-facing error.
+  final privacyFailureSeq = 0.obs;
+  final RxnString privacyFailureText = RxnString();
+  // A remote-page chrome is on screen and handles privacy failures itself.
+  bool privacyChromeMounted = false;
+
+  void reportHostPrivacyFailure(String text) {
+    privacyFailureText.value = text;
+    privacyFailureSeq.value++;
+  }
   // Master switch for the floating virtual keys (按键映射). When off the keys
   // overlay is hidden; scheme selection only changes which keys are configured,
   // it does not enable/disable mapping.

@@ -47,6 +47,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   Timer? _privacyFailTimer;
   Timer? _privacyProbeTimer;
   Timer? _privacyAwaitTimer;
+  Timer? _privacyHostFailTimer;
   Timer? _mutePendingTimer;
   bool? _privacyPendingOn;
   bool _privacyPreplugged = false;
@@ -57,6 +58,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   bool _privacyCommitted = false;
   bool _privacyAuto = false;
   int _privacyProbeRetries = 0;
+  // A lock transition can still look unlocked for a moment. Confirming the
+  // state 0 reply once more ~600 ms later keeps a mid-lock commit from being
+  // sent (the host would fail it and surface an error).
+  bool _privacyZeroSeen = false;
+  int _privacyHostFails = 0;
   // True while auto-recovering privacy after reconnect: a display commit
   // rejected at the lock screen must not flip the switch off, so the tile
   // keeps showing on until the host is unlocked and privacy commits.
@@ -68,6 +74,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   Worker? _peerReadyWorker;
   Worker? _lockWorker;
   Worker? _unlockWorker;
+  Worker? _privacyFailWorker;
   bool _faded = false;
   final Set<String> _expanded = {};
   String? _imageQuality;
@@ -100,11 +107,14 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       _privacyFailTimer?.cancel();
       _privacyProbeTimer?.cancel();
       _privacyAwaitTimer?.cancel();
+      _privacyHostFailTimer?.cancel();
       if (state.isNotEmpty) _privacyAutoRecovering = false;
       setState(() {
         _privacyPendingOn = null;
         _privacyAwaitUnlock = false;
         _privacyCommitted = false;
+        _privacyZeroSeen = false;
+        _privacyHostFails = 0;
       });
     });
     _restorePrivacyIntent();
@@ -116,6 +126,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _lockWorker = ever(uuState.hostLockState, (int? s) => _onLockState(s));
     _unlockWorker =
         ever(uuState.hostUnlockState, (String? st) => _onUnlockState(st));
+    uuState.privacyChromeMounted = true;
+    _privacyFailWorker = ever(
+        uuState.privacyFailureSeq, (_) => _onPrivacyHostFailure());
     _peerReadyWorker = ever(gFFI.ffiModel.pi.isSet, (bool set) {
       if (set) _queryHostMute();
     });
@@ -189,6 +202,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _peerReadyWorker?.dispose();
     _lockWorker?.dispose();
     _unlockWorker?.dispose();
+    _privacyFailWorker?.dispose();
+    _privacyHostFailTimer?.cancel();
+    uuState.privacyChromeMounted = false;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -314,8 +330,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     if (!next) {
       _privacyProbeTimer?.cancel();
       _privacyAwaitTimer?.cancel();
+      _privacyHostFailTimer?.cancel();
       _privacyAwaitUnlock = false;
       _privacyCommitted = false;
+      _privacyZeroSeen = false;
+      _privacyHostFails = 0;
       bind.sessionTogglePrivacyMode(
           sessionId: gFFI.sessionId, implKey: _kPrivacyVdImpl, on: false);
       _privacyFailTimer = Timer(const Duration(seconds: 6), () {
@@ -329,10 +348,13 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     }
     _privacyProbeTimer?.cancel();
     _privacyAwaitTimer?.cancel();
+    _privacyHostFailTimer?.cancel();
     _privacyAwaitUnlock = false;
     _privacyCommitted = false;
     _privacyAuto = auto;
     _privacyProbeRetries = 0;
+    _privacyZeroSeen = false;
+    _privacyHostFails = 0;
     // ON must not race the lock screen: first ask the host whether it is
     // unlocked, then commit the physical screen-off only once state==0 (a
     // confirmed unlocked desktop). Retry the probe a couple of times before
@@ -340,23 +362,37 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     // (and fail) while the host is actually at the lock screen.
     uuState.hostLockState.value = null;
     uuState.hostUnlockState.value = null;
-    void probe() {
-      if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
-      _sendHostCmd('lock?', true);
-      _privacyProbeTimer = Timer(const Duration(seconds: 3), () {
-        if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
-        if (uuState.hostLockState.value != null) return; // reply handled it
-        if (_privacyProbeRetries < 2) {
-          _privacyProbeRetries++;
-          probe();
-        } else {
-          // Old host with no `lock?` reply: legacy direct commit.
-          _commitPrivacyOn();
-        }
-      });
-    }
+    _beginPrivacyProbe();
+  }
 
-    probe();
+  void _beginPrivacyProbe() {
+    if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
+    _sendHostCmd('lock?', true);
+    _privacyProbeTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
+      if (uuState.hostLockState.value != null) return; // reply handled it
+      _privacyProbeRetries++;
+      if (_privacyProbeRetries < 3) {
+        // Reset so an identical reply (e.g. 0 again) still notifies.
+        uuState.hostLockState.value = null;
+        _beginPrivacyProbe();
+      } else if (_hostControlSupported) {
+        // The reverse channel exists but never answered. Committing blind is
+        // exactly how a lock-screen commit failure happens, so give up here.
+        _setHostIntent('privacy', false);
+        setState(() {
+          _privacyCommitted = false;
+          _privacyAwaitUnlock = false;
+          _privacyPendingOn = null;
+        });
+        if (!_privacyAuto) {
+          showToast('无法确认电脑是否已解锁，防窥已取消；解锁后再试');
+        }
+      } else {
+        // Old host with no `lock?` reply: legacy direct commit.
+        _commitPrivacyOn();
+      }
+    });
   }
 
   void _onLockState(int? s) {
@@ -365,11 +401,21 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     debugPrint('[uu-diag] lock-state reply s=$s');
     _privacyProbeTimer?.cancel();
     if (s == 0) {
-      // Confirmed on the normal unlocked desktop -> safe to commit.
+      if (!_privacyZeroSeen) {
+        // A lock transition can still read as the normal desktop for a moment.
+        // Confirm once more after a short settle before committing, otherwise
+        // the host gets the request just as Windows locks and rejects it.
+        _privacyZeroSeen = true;
+        uuState.hostLockState.value = null;
+        _privacyProbeTimer =
+            Timer(const Duration(milliseconds: 600), _beginPrivacyProbe);
+        return;
+      }
       _privacyAwaitUnlock = false;
       _commitPrivacyOn();
       return;
     }
+    _privacyZeroSeen = false;
     // 2 = lock screen, 1 = Winlogon/secure desktop/transition, -1 = could not
     // read the input desktop. All mean "not a confirmed unlocked desktop", and
     // Windows rejects display commits in these states, so wait and re-probe
@@ -390,6 +436,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     void tick() {
       if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
       if (DateTime.now().isAfter(deadline)) {
+        _privacyAwaitTimer?.cancel();
+        _setHostIntent('privacy', false);
         setState(() {
           _privacyAwaitUnlock = false;
           _privacyPendingOn = null;
@@ -419,6 +467,48 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     // keeps re-probing until it commits or hits its deadline.
   }
 
+  // Host-reported privacy failure. Most often the display commit landed right
+  // as Windows locked, so re-probe instead of flipping the switch off: if the
+  // host is not on a confirmed unlocked desktop, fall back to waiting.
+  void _onPrivacyHostFailure() {
+    if (!mounted) return;
+    if (_privacyPendingOn != true) {
+      // Not part of our pending flow (e.g. host-side auto restore): surface it.
+      final msg = uuState.privacyFailureText.value;
+      if (msg != null && msg.isNotEmpty) showToast(msg);
+      return;
+    }
+    _privacyStartTimer?.cancel();
+    _privacyRetryTimer?.cancel();
+    _privacyFailTimer?.cancel();
+    _privacyProbeTimer?.cancel();
+    _privacyAwaitTimer?.cancel();
+    _privacyHostFailTimer?.cancel();
+    _privacyCommitted = false;
+    _privacyPreplugged = false;
+    _privacyZeroSeen = false;
+    // Drop the waiting flag so the re-probe can arm the unlock watch again.
+    if (_privacyAwaitUnlock) setState(() => _privacyAwaitUnlock = false);
+    _privacyHostFails++;
+    if (_privacyHostFails > 2) {
+      final msg = uuState.privacyFailureText.value;
+      _setHostIntent('privacy', false);
+      setState(() {
+        _privacyAwaitUnlock = false;
+        _privacyPendingOn = null;
+      });
+      if (!_privacyAuto) {
+        showToast(msg == null || msg.isEmpty ? '隐私模式操作失败，请稍后重试' : msg);
+      }
+      return;
+    }
+    _privacyHostFailTimer = Timer(const Duration(milliseconds: 800), () {
+      if (!mounted || _privacyPendingOn != true) return;
+      uuState.hostLockState.value = null;
+      _beginPrivacyProbe();
+    });
+  }
+
   // Re-send the auto-unlock command so the host can leave the lock screen,
   // mirroring remote_page's first-frame path. No-op when not configured or the
   // host lacks the capability.
@@ -441,7 +531,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _privacyCommitted = true;
     _privacyProbeTimer?.cancel();
     _privacyAwaitTimer?.cancel();
+    _privacyHostFailTimer?.cancel();
     _privacyAwaitUnlock = false;
+    _privacyZeroSeen = false;
     // turn_on only waits 5s for the virtual display to appear, but Amyuni's
     // monitor needs ~6s to reach ACTIVE. Plug it first so the server-side
     // check finds it instead of racing.
@@ -664,7 +756,18 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         children: [
           // Each item owns a full quarter of the right edge, not just
           // the small icon area.
-          Expanded(child: _railItem(Icons.tune, '操作', () => _openDrawer('menu'))),
+          Expanded(
+              child: _railItem(Icons.tune, '操作', () {
+            // Toggle: a second tap on 操作 collapses whatever is open back to
+            // the minimized tool ball instead of doing nothing.
+            if (uuState.drawerPage.value != null) {
+              uuState.drawerPage.value = null;
+            } else if (uuState.railOpen.value) {
+              uuState.railOpen.value = false;
+            } else {
+              _openDrawer('menu');
+            }
+          })),
           Expanded(child: _railItem(Icons.keyboard, '键盘', _openKeyboard)),
           Expanded(
               child: _railItem(
@@ -869,6 +972,38 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // Single-link card matching a _groupCard header exactly (same padding, icon
+  // gap and title size), so a top-level row lines up with 显示/安全/更多.
+  Widget _linkCard(IconData icon, String title, VoidCallback onTap) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2F2F31),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          child: Row(
+            children: [
+              Icon(icon, color: Colors.white70, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(title,
+                    style:
+                        const TextStyle(color: Colors.white, fontSize: 14)),
+              ),
+              const Icon(Icons.chevron_right,
+                  color: Colors.white38, size: 20),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1281,10 +1416,10 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         const SizedBox(height: 12),
         _groupCard('显示', Icons.monitor_outlined, _displayRows()),
         _groupCard('安全', Icons.shield_outlined, _securityRows()),
-        // 外设 分组只剩「手势与触摸」一行，去掉这层无用折叠，直接呈现。
-        _card(_navRow(Icons.touch_app_outlined, '手势与触摸', () {
+        // 外设 分组只剩「手势与触摸」一行，用与分组标题同款排版直接呈现。
+        _linkCard(Icons.touch_app_outlined, '手势与触摸', () {
           uuState.drawerPage.value = 'gestures';
-        })),
+        }),
         _groupCard('更多', Icons.more_horiz, _moreRows(context)),
       ],
     );

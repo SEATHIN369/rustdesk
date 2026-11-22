@@ -252,3 +252,25 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 
 ---
 
+
+## 案例：锁屏切换瞬间防窥失败与失败提示（2026-11-22 12:50）
+
+**现象**：12:34 包真机，重连自动恢复防窥时约 4s 弹「隐私模式操作失败，请稍后重试」；手动开也可能秒失败。
+
+**主机日志证据**（`ServiceProfiles\LocalService\...\log\server\RustDesk_rCURRENT.log`，12:40 一轮）：
+- 12:40:20 手机断开 → 12:40:23 主机 turn_off → 12:40:29 重连 → 12:40:30 `Displays changed` + `Desktop switched`。
+- 12:40:31 `[uu-diag] turn_on_privacy`；`win_virtual_display.rs:240 Failed ChangeDisplaySettingsEx, the virtual display, ret: -1, last error: 0`，4 次重试全失败。
+- 12:40:35 主机发 `PrvOnFailed`，手机弹 toast；同一时刻 `auto_unlock: lock screen detected, desktop "Winlogon"` → 机器当时确实处于/正在进入锁屏。
+
+**根因**：
+1. 锁屏切换有短暂窗口，`OpenInputDesktop` 仍可能读到 Default，`uu:lock-state` 回 0，客户端按「已解锁」立刻提交，随后 Windows 已切到 Winlogon，提交被拒。
+2. 客户端把主机的 `PrvOnFailed` 直接映射成 toast，没有回看锁屏态；于是「锁屏期间」的表现仍是失败 + 开关翻回。
+
+**修法（纯 Dart）**：
+- `lock-state==0` 不立刻提交：600ms 后重置状态并再探一次，两次都是 0 才 `_commitPrivacyOn()`。
+- 主机隐私失败不再直接 toast：`model.dart` 在 chrome 挂载时转给 `uuState.reportHostPrivacyFailure`，chrome 复探锁屏态——非 0 回到「等待被控端解锁」，连续 3 次主机失败才取消并提示；auto 模式静默。
+- 有 `uu_host_control` 能力的主机探测无回复时**不再盲目提交**（取消并提示「无法确认电脑是否已解锁」），只有旧主机才回退旧流程。
+
+**教训**：对「正在变化」的资源（锁屏切换、显示拓扑变更）不能用一次瞬时采样做决定；失败通知先归因（查当前状态）再决定是否展示给用户。
+
+---

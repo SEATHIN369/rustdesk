@@ -120,23 +120,24 @@ class _ConnectionPageState extends State<ConnectionPage> {
   /// UI for software update.
   /// If _updateUrl] is not empty, shows a button to update the software.
   Widget _buildUpdateUI(String updateUrl) {
-    final tag = Uri.tryParse(updateUrl)?.pathSegments.last ?? '';
-    final text =
-        tag.isEmpty ? translate('Download new version') : '${translate('Download new version')} $tag';
-    return updateUrl.isEmpty
-        ? const SizedBox(height: 0)
-        : InkWell(
-            onTap: () async {
-              await launchUrl(Uri.parse(updateUrl));
-            },
-            child: Container(
-                alignment: AlignmentDirectional.center,
-                width: double.infinity,
-                color: Colors.pinkAccent,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(text,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold))));
+    if (updateUrl.isEmpty) return const SizedBox(height: 0);
+    final segments = Uri.tryParse(updateUrl)?.pathSegments ?? const <String>[];
+    final tag = segments.isEmpty ? '' : segments.last;
+    final text = tag.isEmpty
+        ? translate('Download new version')
+        : '${translate('Download new version')} $tag';
+    return InkWell(
+        onTap: () async {
+          await launchUrl(Uri.parse(updateUrl));
+        },
+        child: Container(
+            alignment: AlignmentDirectional.center,
+            width: double.infinity,
+            color: Colors.pinkAccent,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(text,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold))));
   }
 
   /// UI for the remote ID TextField.

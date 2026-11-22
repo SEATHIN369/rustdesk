@@ -56,6 +56,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   bool _privacyAwaitUnlock = false;
   bool _privacyCommitted = false;
   bool _privacyAuto = false;
+  int _privacyProbeRetries = 0;
   // True while auto-recovering privacy after reconnect: a display commit
   // rejected at the lock screen must not flip the switch off, so the tile
   // keeps showing on until the host is unlocked and privacy commits.
@@ -290,7 +291,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   // `on` is the user's intent, persisted per peer: the host always restores
   // the physical screen on disconnect, so a new session re-applies it.
   void _togglePrivacy(bool next, {bool auto = false}) {
-    if (_privacyPendingOn != null) return;
+    // A pending ON can still be canceled (turning OFF); ignore redundant
+    // same-state taps otherwise.
+    if (_privacyPendingOn != null && !(_privacyPendingOn == true && !next)) {
+      return;
+    }
     final cur = PrivacyModeState.find(widget.id).value.isNotEmpty;
     if (cur == next) return;
     if (!_privacySupported()) {
@@ -307,6 +312,10 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _privacyRetryTimer?.cancel();
     _privacyFailTimer?.cancel();
     if (!next) {
+      _privacyProbeTimer?.cancel();
+      _privacyAwaitTimer?.cancel();
+      _privacyAwaitUnlock = false;
+      _privacyCommitted = false;
       bind.sessionTogglePrivacyMode(
           sessionId: gFFI.sessionId, implKey: _kPrivacyVdImpl, on: false);
       _privacyFailTimer = Timer(const Duration(seconds: 6), () {
@@ -323,48 +332,78 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     _privacyAwaitUnlock = false;
     _privacyCommitted = false;
     _privacyAuto = auto;
+    _privacyProbeRetries = 0;
     // ON must not race the lock screen: first ask the host whether it is
-    // unlocked, then commit the physical screen-off once it is.
+    // unlocked, then commit the physical screen-off only once state==0 (a
+    // confirmed unlocked desktop). Retry the probe a couple of times before
+    // assuming an old host, so a single dropped reply can't make us commit
+    // (and fail) while the host is actually at the lock screen.
     uuState.hostLockState.value = null;
     uuState.hostUnlockState.value = null;
-    _sendHostCmd('lock?', true);
-    _privacyProbeTimer = Timer(const Duration(seconds: 3), () {
+    void probe() {
       if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
-      if (uuState.hostLockState.value == null) {
-        // Host has no lock? support (older build) -> fall back to the direct
-        // flow rather than hang waiting for a reply that will never come.
-        _commitPrivacyOn();
-      }
-    });
+      _sendHostCmd('lock?', true);
+      _privacyProbeTimer = Timer(const Duration(seconds: 3), () {
+        if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
+        if (uuState.hostLockState.value != null) return; // reply handled it
+        if (_privacyProbeRetries < 2) {
+          _privacyProbeRetries++;
+          probe();
+        } else {
+          // Old host with no `lock?` reply: legacy direct commit.
+          _commitPrivacyOn();
+        }
+      });
+    }
+
+    probe();
   }
 
   void _onLockState(int? s) {
     if (_privacyPendingOn != true || _privacyCommitted) return;
-    if (s == null) return; // probe timeout handles the old-host case
+    if (s == null) return; // probe retry handles the no-reply case
+    debugPrint('[uu-diag] lock-state reply s=$s');
     _privacyProbeTimer?.cancel();
-    if (s == 2) {
-      // At the lock screen: Windows rejects the display commit here, so wait
-      // for the unlock (kick it off if configured) instead of arming the
-      // flip-off fail timer.
-      setState(() => _privacyAwaitUnlock = true);
-      _privacyPreplugged = false;
-      _triggerAutoUnlockIfNeeded();
-      _privacyAwaitTimer?.cancel();
-      _privacyAwaitTimer = Timer(const Duration(seconds: 45), () {
-        if (!mounted || _privacyPendingOn != true || !_privacyAwaitUnlock) {
-          return;
-        }
+    if (s == 0) {
+      // Confirmed on the normal unlocked desktop -> safe to commit.
+      _privacyAwaitUnlock = false;
+      _commitPrivacyOn();
+      return;
+    }
+    // 2 = lock screen, 1 = Winlogon/secure desktop/transition, -1 = could not
+    // read the input desktop. All mean "not a confirmed unlocked desktop", and
+    // Windows rejects display commits in these states, so wait and re-probe
+    // instead of committing (which would fail and flip the switch off).
+    if (_privacyAwaitUnlock) return; // already watching; poll timer decides
+    setState(() => _privacyAwaitUnlock = true);
+    _privacyPreplugged = false;
+    if (s == 2) _triggerAutoUnlockIfNeeded();
+    _startUnlockWatch();
+  }
+
+  // While the host is not on a confirmed unlocked desktop, re-probe every 4 s
+  // so we commit the instant it unlocks, and never give up merely because the
+  // host stayed locked — the switch keeps showing ON ("等待解锁") meanwhile.
+  void _startUnlockWatch() {
+    _privacyAwaitTimer?.cancel();
+    final deadline = DateTime.now().add(const Duration(minutes: 10));
+    void tick() {
+      if (!mounted || _privacyPendingOn != true || _privacyCommitted) return;
+      if (DateTime.now().isAfter(deadline)) {
         setState(() {
           _privacyAwaitUnlock = false;
           _privacyPendingOn = null;
         });
-        if (!_privacyAuto) showToast('被控端仍处于锁屏，防窥已取消');
-      });
-      return;
+        if (!_privacyAuto) {
+          showToast('电脑长时间锁屏，防窥未开启；解锁后请重新开启');
+        }
+        return;
+      }
+      _sendHostCmd('lock?', true);
+      _privacyAwaitTimer = Timer(const Duration(seconds: 4), tick);
     }
-    // Desktop is reachable -> commit now.
-    _privacyAwaitUnlock = false;
-    _commitPrivacyOn();
+
+    _privacyAwaitTimer = Timer(const Duration(seconds: 4), tick);
   }
 
   void _onUnlockState(String? st) {
@@ -376,8 +415,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       setState(() => _privacyAwaitUnlock = false);
       _commitPrivacyOn();
     }
-    // 'failed': keep waiting; the user may unlock by hand. The 45 s await
-    // timer decides when to give up.
+    // 'failed': keep waiting; the user may unlock by hand. The unlock watch
+    // keeps re-probing until it commits or hits its deadline.
   }
 
   // Re-send the auto-unlock command so the host can leave the lock screen,
@@ -400,6 +439,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   void _commitPrivacyOn() {
     if (!mounted || _privacyPendingOn != true) return;
     _privacyCommitted = true;
+    _privacyProbeTimer?.cancel();
+    _privacyAwaitTimer?.cancel();
+    _privacyAwaitUnlock = false;
     // turn_on only waits 5s for the virtual display to appear, but Amyuni's
     // monitor needs ~6s to reach ACTIVE. Plug it first so the server-side
     // check finds it instead of racing.
@@ -672,6 +714,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       'menu': '操作',
       'schemes': '操控方案',
       'gestures': '手势与触摸',
+      'gestureHelp': '手势说明',
     };
     final parent = _parentPage(page);
     return Stack(
@@ -728,7 +771,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
                     ? _menuPage(context)
                     : page == 'schemes'
                         ? _schemesPage(context)
-                        : _gesturesPage(context),
+                        : page == 'gestureHelp'
+                            ? _gestureHelpPage(context)
+                            : _gesturesPage(context),
               ),
             ],
           ),
@@ -746,6 +791,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     switch (page) {
       case 'menu':
         return null;
+      case 'gestureHelp':
+        return 'gestures';
       default:
         return 'menu';
     }
@@ -1220,22 +1267,17 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         _actionBar(),
         const SizedBox(height: 20),
         _sectionLabel('操作'),
-        _card(Column(
+        _card(Obx(() => Column(
           children: [
             _keymapMasterRow(),
-            Obx(() => AnimatedSize(
-                  duration: const Duration(milliseconds: 180),
-                  alignment: Alignment.topCenter,
-                  clipBehavior: Clip.hardEdge,
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    heightFactor: uuState.keyMapEnabled.value ? 1 : 0,
-                    child: _keymapExpanded(),
-                  ),
-                )),
+            // Hard conditional, deliberately NOT AnimatedSize/Align(heightFactor):
+            // the collapsing trick only shrank the layout height while the rows
+            // still painted, and this card has no clip, so the expanded rows bled
+            // over the "操作方式" row below (重叠). Off = not in the tree at all.
+            if (uuState.keyMapEnabled.value) _keymapExpanded(),
             if (!gFFI.ffiModel.isPeerAndroid) _touchPointerRow(),
           ],
-        )),
+        ))),
         const SizedBox(height: 12),
         _groupCard('显示', Icons.monitor_outlined, _displayRows()),
         _groupCard('安全', Icons.shield_outlined, _securityRows()),
@@ -1256,8 +1298,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         _card(Column(
           children: [
             _navRow(Icons.help_outline, '查看手势说明', () {
-              uuState.drawerPage.value = null;
-              widget.onToggleGestureHelp();
+              uuState.drawerPage.value = 'gestureHelp';
             }),
             _toggleRow('双指缩放', scheme.pinchZoom, (v) {
               scheme.pinchZoom = v;
@@ -1270,6 +1311,60 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 12, 4, 0),
           child: Text('灵敏度过高时慢速滑动容易越过目标行，过低时需要反复滑动。',
+              style: TextStyle(color: Colors.white38, fontSize: 11)),
+        ),
+      ],
+    );
+  }
+
+  // UU-styled gesture reference. Replaces the upstream GestureHelp bottom bar
+  // (which was opening as a full-width overlay with no way back once the drawer
+  // closed). Lives inside the drawer so the header's back chevron returns to
+  // 手势与触摸. Descriptions reflect THIS build's engine, not upstream's.
+  Widget _gestureHelpPage(BuildContext context) {
+    Widget row(IconData icon, String title, String desc) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: Colors.white70, size: 22),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(color: Colors.white, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  Text(desc,
+                      style: const TextStyle(
+                          color: Colors.white38, fontSize: 11)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      children: [
+        _card(Column(
+          children: [
+            row(Icons.touch_app_outlined, '单指轻点', '远端鼠标左键单击'),
+            row(Icons.touch_app, '单指长按', '远端鼠标右键'),
+            row(Icons.open_with, '单指拖动', '按住并拖动鼠标'),
+            row(Icons.swap_vert, '双指竖直滑动', '远端滚轮（上下滚动）'),
+            row(Icons.pan_tool_outlined, '双指水平滑动', '平移画布视图'),
+            row(Icons.pinch, '双指捏合', '画布缩放（可在上一页关闭）'),
+            row(Icons.back_hand_outlined, '三指滑动', '交给系统截屏，不发送到电脑'),
+          ],
+        )),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(4, 12, 4, 0),
+          child: Text('手势判定会向滑动方向温和收紧；判错时多为双指张开误触缩放，可在上一页关闭「双指缩放」。',
               style: TextStyle(color: Colors.white38, fontSize: 11)),
         ),
       ],

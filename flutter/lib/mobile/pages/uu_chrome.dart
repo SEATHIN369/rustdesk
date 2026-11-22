@@ -207,10 +207,11 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
       }
       // Peer info can arrive a few seconds after the page is built.
       _diag('restore try#$tries unsupported yet');
-      Timer(const Duration(seconds: 3), attempt);
+      tries++;
+      Timer(Duration(milliseconds: tries < 10 ? 800 : 3000), attempt);
     }
 
-    Future.delayed(const Duration(seconds: 3), attempt);
+    Future.delayed(const Duration(milliseconds: 600), attempt);
   }
 
   @override
@@ -640,11 +641,34 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     }
 
     if (preplug && !hadVirtualDisplay && !_privacyPreplugged) {
-      _diag('commit preplug virtual display, request in 4s');
+      _diag('commit preplug virtual display, poll until ready (max 4s)');
       _privacyPreplugged = true;
       bind.sessionToggleVirtualDisplay(
           sessionId: gFFI.sessionId, index: 0, on: true);
-      _privacyStartTimer = Timer(const Duration(seconds: 4), requestPrivacy);
+      // Amyuni's monitor needs a moment to reach ACTIVE; commit as soon as it
+      // shows up plus a short settle instead of always burning 4 s.
+      final begin = DateTime.now();
+      DateTime? activeSince;
+      _privacyStartTimer =
+          Timer.periodic(const Duration(milliseconds: 250), (t) {
+        if (!mounted || _privacyPendingOn != true) {
+          t.cancel();
+          return;
+        }
+        final now = DateTime.now();
+        if (gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty) {
+          activeSince ??= now;
+        }
+        final ready = activeSince != null &&
+            now.difference(activeSince!).inMilliseconds >= 1200;
+        final timedOut = now.difference(begin).inSeconds >= 4;
+        if (ready || timedOut) {
+          t.cancel();
+          _diag('preplug ready=${ready} after '
+              '${now.difference(begin).inMilliseconds}ms');
+          requestPrivacy();
+        }
+      });
     } else {
       requestPrivacy();
     }
@@ -1489,10 +1513,33 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     ];
   }
 
+  // UU-style safety nudge above the action bar: the host speaker is still
+  // audible or the physical screen is still on.
+  Widget _securityHint() {
+    return Obx(() {
+      final _ = uuState.hostStateVersion.value; // mute intent follows host replies
+      final muteOff = _hostControlSupported && !_hostIntent('mute');
+      final screenOff = _privacySupported() &&
+          PrivacyModeState.find(widget.id).value.isEmpty &&
+          _privacyPendingOn != true;
+      if (!muteOff && !screenOff) return const SizedBox.shrink();
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(4, 2, 4, 10),
+        child: Row(children: [
+          Icon(Icons.error_outline, size: 16, color: Color(0xFFFFA726)),
+          SizedBox(width: 6),
+          Text('隐私安全状态需关注',
+              style: TextStyle(color: Color(0xFFFFA726), fontSize: 13)),
+        ]),
+      );
+    });
+  }
+
   Widget _menuPage(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       children: [
+        _securityHint(),
         _actionBar(),
         const SizedBox(height: 20),
         _sectionLabel('操作'),

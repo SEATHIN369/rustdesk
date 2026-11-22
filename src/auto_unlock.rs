@@ -71,8 +71,8 @@ fn run(password: &str) -> String {
     use crate::platform::windows;
 
     const ATTEMPTS: u32 = 3;
-    // Leaving Winlogon after a correct password takes ~120 ms in practice; 2 s is
-    // a safe ceiling while halving the dead wait on a failed attempt.
+    // Leaving Winlogon after a correct password takes ~120 ms, but slow
+    // transitions have taken up to ~1.9 s, so keep the 2 s ceiling.
     const UNLOCK_WAIT: Duration = Duration::from_secs(2);
     // The client asks right after the first frame; the lock can land a moment
     // later (or Winlogon can still be settling), so poll before giving up.
@@ -108,9 +108,10 @@ fn run(password: &str) -> String {
             std::thread::sleep(Duration::from_millis(150));
         } else {
             // The lock screen swallows the first keystroke while dismissing
-            // its overlay, so wake it with a harmless modifier tap.
+            // its overlay; give it longer than one animation frame before
+            // typing, otherwise the whole attempt is lost.
             windows::inject_wake_tap();
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(450));
         }
         let sent = windows::inject_unicode_text(&units);
         windows::inject_enter();
@@ -119,14 +120,25 @@ fn run(password: &str) -> String {
             units.len()
         );
         let start = Instant::now();
+        let mut second_enter = false;
         while start.elapsed() < UNLOCK_WAIT {
-            std::thread::sleep(Duration::from_millis(120));
+            std::thread::sleep(Duration::from_millis(60));
             if !windows::is_lock_screen_active() {
                 success = Some(format!(
                     "success on attempt {attempt} after {} ms",
                     start.elapsed().as_millis()
                 ));
                 break;
+            }
+            // The overlay can eat the first Enter while the password text
+            // landed; submit again before declaring the attempt lost.
+            if attempt == 1 && !second_enter && start.elapsed().as_millis() >= 600 {
+                second_enter = true;
+                windows::inject_enter();
+                log::info!(
+                    "Auto unlock: attempt 1 second Enter at {} ms",
+                    start.elapsed().as_millis()
+                );
             }
         }
         if success.is_some() {

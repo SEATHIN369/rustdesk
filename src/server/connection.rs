@@ -5236,6 +5236,26 @@ impl Connection {
                 impl_key,
             )
         } else {
+            // A display commit is rejected while Windows sits at the lock
+            // screen. Skip the doomed 4x ChangeDisplaySettingsEx retries so the
+            // client can start waiting for the unlock immediately.
+            #[cfg(windows)]
+            if impl_key == privacy_mode::PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY {
+                let (lock_state, desk) = crate::platform::windows::lock_screen_state();
+                if lock_state == 2 {
+                    log::info!(
+                        "[uu-diag] turn_on_privacy fast-fail at lock screen, desktop={desk:?}"
+                    );
+                    let msg = crate::common::make_privacy_mode_msg_with_details(
+                        back_notification::PrivacyModeState::PrvOnFailed,
+                        "Locked".to_string(),
+                        impl_key,
+                    );
+                    self.send(msg).await;
+                    log::info!("[uu-diag] privacy ON back_notification sent to peer impl_key={diag_impl_key}");
+                    return;
+                }
+            }
             let is_pre_privacy_on = privacy_mode::is_in_privacy_mode();
             let pre_impl_key = privacy_mode::get_cur_impl_key();
 

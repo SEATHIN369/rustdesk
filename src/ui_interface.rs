@@ -607,13 +607,11 @@ pub fn set_share_rdp(_enable: bool) {
 
 #[inline]
 pub fn is_installed_lower_version() -> bool {
-    #[cfg(not(windows))]
-    return false;
-    #[cfg(windows)]
-    {
-        let b = crate::platform::windows::get_reg("BuildDate");
-        return crate::BUILD_DATE.cmp(&b).is_gt();
-    }
+    // This fork ships as a portable pack over the official 1.5.3 install and is
+    // rebuilt locally, so BUILD_DATE is always newer than the installer's
+    // registry value. The UI would then permanently show a bogus "upgrade to a
+    // newer version" card that points at upstream releases.
+    false
 }
 
 #[inline]

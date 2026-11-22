@@ -274,3 +274,31 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 **教训**：对「正在变化」的资源（锁屏切换、显示拓扑变更）不能用一次瞬时采样做决定；失败通知先归因（查当前状态）再决定是否展示给用户。
 
 ---
+
+## 案例：重连自动重发防窥绕过门控 + 自动解锁耗时分布（2026-11-22 14:15）
+
+**现象**：14:07 锁屏重连仍弹「隐私模式操作失败，请稍后重试」，3.4s 后电脑自动解锁成功却不再重试；14:13 换修复包后同场景正常。
+
+**根因（手机探针 + 主机日志对齐）**：
+- 官方 `librustdesk.so` 在每会话**首帧**调用 `send_toggle_privacy_mode_msg`（`src/client/io_loop.rs:1503`），按它自己持久化的 `config.privacy_mode=true` 直接向主机发 `turn_on`，**完全绕过 Dart 的 `lock?` 门控**。
+- 锁屏下主机 4 次 `ChangeDisplaySettingsEx` 全拒（14:07:23.6→25.76），27.75 回 `PrvOnFailed`；客户端状态被清空 → toast；主机 27.75 起自动解锁、31.17 成功，但客户端重试链已死。
+- 次生 bug：新 chrome 先 `initState`、旧实例后 `dispose`，旧 dispose 把 `privacyChromeMounted=false`，导致失败直接 toast。
+
+**修法（纯 Dart，commit a90abdbb5）**：
+- 官方防窥报错一律不展示，只转发给状态机。
+- 失败且意图仍为开（含 .so 自动重发失败）：静默置 pending 并重新 `lock?` 探测，锁屏则等解锁后自动重提。
+- 空状态回显不再清 pending ON；chrome 挂载改计数。
+- 终态仅手动模式提示「防窥未能开启，请解锁电脑后再试」。
+
+**自动解锁耗时分布**（`grep auto_unlock.rs`，2026-11-22 共 11 次成功，全部 attempt1 失败、attempt2 成功 10/11）：
+- 检测→成功：p50 3.76s，均值 4.04s，min 3.24s，p90≈6.0s，max 6.82s。
+- 阶段：检测→attempt1 0.42–0.44s；attempt1 空等 2.06–2.09s（100% 浪费）；退格/间隔 0.62–0.66s；attempt2 注入→确认 0.12–1.85s（120ms 轮询）。
+- 端到端（14:13 正常例）：首次解锁请求 18.455 → 主机成功 23.46 → 客户端 23.68；随后固定预插 4s → 27.68 请求 → 28.66 生效。首帧到生效约 12s。
+
+**优化计划（待办）**：
+1. 主机 auto_unlock：修 attempt1（开屏后点击密码框/延到 500ms/补发 Enter），预期解锁 5s → 1–1.5s。
+2. 主机 turn_on_privacy：先查 `lock_screen_state()==2` 直接快速失败，省掉 4.1s 注定失败的重试（影响 .so 自动重发路径）。
+3. 客户端：预插虚拟屏由固定 4s 改为轮询 `RustDeskVirtualDisplays`（~1–1.5s 即提交，保底 4s）；restore 起始 3s 改为 `pi.isSet` 事件驱动。
+4. 验证：锁屏重连场景 ≥10 次，p50 ≤6s、无 toast，再定稿。
+
+---

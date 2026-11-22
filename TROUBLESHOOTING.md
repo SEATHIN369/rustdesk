@@ -321,3 +321,8 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 - 主机 fast-fail 生效：锁屏时 turn_on 17.814 → 17.817 即回 PrvOnFailed（3ms，原为 4.1s）。
 - revert 后的 auto_unlock 正常：attempt2 成功 181ms / 1609ms，无「密码不正确」。
 - attempt1 补发 Enter 的实验**不安全**（14:29 两轮 3/3 全失败，空密码被提交成错误密码），已回退，不再尝试同类改法。
+
+**14:55 验证结果（APK `ec2ac984`）**：
+- 手动开（未锁屏）：37.36 点开关 → 37.97 两次 0 确认 → commit 时 `amyuni=3 hadVD=true` 直接提交 → 38.93 生效，约 1.6s；不再有 `preplug ready=false after 4000ms`。
+- 锁屏重连（auto）：56.74 转发失败 → 56.76 探到 `lock-state:2` → 56.79 发解锁 → 02.49 解锁成功（attempt3 仅 135ms，attempt1/2 未离屏）→ 02.70 立即提交 → 04.08 防窥生效。首帧到生效 7.3s，比上一轮 9.8s 少约 2.5s。
+- 注意：本次 `injected 1/1 characters`，密码长度就是 1 位；attempt1 被锁屏首击吞掉属预期，attempt2 偶发未离屏，仍由 attempt3 兜底。

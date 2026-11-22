@@ -1,3 +1,17 @@
+> **本仓库说明（Fork）**
+>
+> 本项目基于 [RustDesk](https://github.com/rustdesk/rustdesk) 1.5.3 做个人自用分支，把手机端交互按网易 UU 远程 1:1 复刻，用于自建远控替代。上游 README 原样保留在下方。
+>
+> - 分支：`local/1.5.3-android`
+> - 下载：[Releases](https://github.com/kitsuneMori96/rustdesk/releases) —— `*-android-arm64-*.apk` 为手机端，`*-host-win64-*.zip` 为 Windows 被控端（含自编译 DLL），请成对使用
+> - 手机端：复用官方 1.5.3 的 `librustdesk.so`，定制全部在 Dart / Kotlin 层（UU 式悬浮键与操作抽屉、双指滚动/缩放意图锁定、三合一键盘面板、画质档位、隐私模式自动关物理屏、锁屏等待解锁、重连自动恢复、意外断连锁屏、自动解锁、音量键只控手机等）
+> - 被控端：自编译 `librustdesk.dll`，在隐私/显示/锁屏相关能力上提供额外的内部命令通道；新版手机端连旧 DLL 主机时自动回退旧流程
+> - 构建：Flutter 3.24.5 + JDK 17（APK，`flutter build apk --release --target-platform android-arm64`）；Rust `cargo build --release --lib --features flutter`（DLL）
+>
+> 许可沿用 [AGPL-3.0](LICENSE)；本分支的问题与上游无关，请勿向 RustDesk 上游提报。
+
+---
+
 <p align="center">
   <img src="res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#raw-steps-to-build">Build</a> •

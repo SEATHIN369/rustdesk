@@ -120,27 +120,21 @@ class _ConnectionPageState extends State<ConnectionPage> {
   /// UI for software update.
   /// If _updateUrl] is not empty, shows a button to update the software.
   Widget _buildUpdateUI(String updateUrl) {
+    final tag = Uri.tryParse(updateUrl)?.pathSegments.last ?? '';
+    final text =
+        tag.isEmpty ? translate('Download new version') : '${translate('Download new version')} $tag';
     return updateUrl.isEmpty
         ? const SizedBox(height: 0)
         : InkWell(
             onTap: () async {
-              final url = 'https://rustdesk.com/download';
-              // https://pub.dev/packages/url_launcher#configuration
-              // https://developer.android.com/training/package-visibility/use-cases#open-urls-custom-tabs
-              //
-              // `await launchUrl(Uri.parse(url))` can also run if skip
-              // 1. The following check
-              // 2. `<action android:name="android.support.customtabs.action.CustomTabsService" />` in AndroidManifest.xml
-              //
-              // But it is better to add the check.
-              await launchUrl(Uri.parse(url));
+              await launchUrl(Uri.parse(updateUrl));
             },
             child: Container(
                 alignment: AlignmentDirectional.center,
                 width: double.infinity,
                 color: Colors.pinkAccent,
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(translate('Download new version'),
+                child: Text(text,
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.bold))));
   }

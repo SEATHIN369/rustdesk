@@ -20,6 +20,7 @@ import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
+import 'package:http/http.dart' as httppkg;
 import 'package:provider/provider.dart';
 import 'package:uni_links/uni_links.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -4106,20 +4107,45 @@ void earlyAssert() {
   assert('\1' == '1');
 }
 
+const _kUuReleaseLatestApi =
+    'https://api.github.com/repos/kitsuneMori96/rustdesk/releases/latest';
+const _kUuReleaseTagPattern = r'^v\d+\.\d+\.\d+-uu\.(\d+)$';
+
+int _uuReleaseNumber(String tag) =>
+    int.tryParse(RegExp(_kUuReleaseTagPattern).firstMatch(tag)?.group(1) ?? '') ??
+    0;
+
+// The Android client reuses the official .so, whose startup check still asks
+// api.rustdesk.com; desktop builds ship a fork DLL with checks disabled. Both
+// should point at the fork's GitHub releases, so the client drives the check
+// here instead of mirroring the upstream result.
 void checkUpdate() {
-  if (!isWeb) {
-    if (!bind.isCustomClient()) {
-      platformFFI.registerEventHandler(
-          kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish,
-          (Map<String, dynamic> evt) async {
-        if (evt['url'] is String) {
-          stateGlobal.updateUrl.value = evt['url'];
-        }
-      });
-      Timer(const Duration(seconds: 1), () async {
-        bind.mainGetSoftwareUpdateUrl();
-      });
+  if (isWeb) return;
+  if (!isAndroid) return;
+  // Keep the official checker from firing at all; we do our own below.
+  bind.mainSetLocalOption(key: kOptionEnableCheckUpdate, value: 'N');
+  Timer(const Duration(seconds: 1), _checkUuForkUpdate);
+}
+
+Future<void> _checkUuForkUpdate() async {
+  try {
+    final resp = await httppkg.get(
+      Uri.parse(_kUuReleaseLatestApi),
+      headers: {'Accept': 'application/vnd.github+json'},
+    ).timeout(const Duration(seconds: 6));
+    if (resp.statusCode != 200) return;
+    final data = json.decode(resp.body);
+    if (data is! Map) return;
+    final tag = data['tag_name']?.toString() ?? '';
+    final page = data['html_url']?.toString() ?? '';
+    debugPrint('[uu-diag] fork latest release: $tag (current $kUuCurrentReleaseTag)');
+    if (page.isEmpty) return;
+    if (_uuReleaseNumber(tag) > _uuReleaseNumber(kUuCurrentReleaseTag)) {
+      debugPrint('[uu-diag] fork update available: $tag');
+      stateGlobal.updateUrl.value = page;
     }
+  } catch (e) {
+    debugPrint('[uu-diag] fork update check failed: $e');
   }
 }
 

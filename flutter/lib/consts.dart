@@ -725,3 +725,7 @@ extension WindowsTargetExt on int {
 }
 
 const kCheckSoftwareUpdateFinish = 'check_software_update_finish';
+
+// Release tag this build corresponds to. Bump it whenever a new fork release
+// is published, otherwise clients will keep prompting for the same tag.
+const kUuCurrentReleaseTag = 'v1.5.3-uu.1';

@@ -326,3 +326,23 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 - 手动开（未锁屏）：37.36 点开关 → 37.97 两次 0 确认 → commit 时 `amyuni=3 hadVD=true` 直接提交 → 38.93 生效，约 1.6s；不再有 `preplug ready=false after 4000ms`。
 - 锁屏重连（auto）：56.74 转发失败 → 56.76 探到 `lock-state:2` → 56.79 发解锁 → 02.49 解锁成功（attempt3 仅 135ms，attempt1/2 未离屏）→ 02.70 立即提交 → 04.08 防窥生效。首帧到生效 7.3s，比上一轮 9.8s 少约 2.5s。
 - 注意：本次 `injected 1/1 characters`，密码长度就是 1 位；attempt1 被锁屏首击吞掉属预期，attempt2 偶发未离屏，仍由 attempt3 兜底。
+
+---
+
+## 案例：自编译 DLL 导致桌面端常亮「版本较低，点击升级」（2026-11-22 15:03）
+
+**现象**：Windows 客户端首页左侧常驻粉色卡片「状态 / 你安装的版本比当前运行的低 / 点击这里升级」。
+
+**根因**：
+- 卡片由 `desktop_home_page.dart:469` 的 `bind.mainIsInstalledLowerVersion()` 驱动，DLL 侧 `ui_interface.rs is_installed_lower_version()` 比较编译期 `BUILD_DATE` 与安装器写入注册表的 `BuildDate`。安装目录仍是官方 1.5.3 安装器，自编译 DLL 的 BUILD_DATE 恒更新 → 永远为真。
+- 另一条 `do_check_software_update()` 会请求 rustdesk.com 版本接口，卡片按钮指向上游 release；其 auto-updater 还可能把官方 DLL 覆盖回来。
+
+**修法（DLL `F42E1A9D`）**：
+- `is_installed_lower_version()` 恒返回 false（自编译包不参与安装态比较）。
+- `do_check_software_update()` 直接返回 Ok，不再写 `SOFTWARE_UPDATE_URL`（不再出现「发现新版本」卡，也不会自动更新覆盖）。
+
+**验证**：15:03 部署后服务重启，新 `--server` 正常拉起、无 panic；客户端首页不再出现该卡。
+
+**教训**：替换官方 DLL 的自编译发行版，所有「安装态/更新态」判断（BUILD_DATE、版本接口、auto-update）都要单独审一遍，否则会给用户一个通往上游的陷阱按钮。
+
+**首个发行**：GitHub release `v1.5.3-uu.1`（fork，APK `ec2ac984…` + 主机包 `407CA12E…` 双资产），发行说明含安装步骤与 SHA256。

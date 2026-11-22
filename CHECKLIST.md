@@ -4,15 +4,15 @@
 状态：⬜ 待测 ｜ 🔄 进行中 ｜ ✅ 通过 ｜ ❌ 失败 ｜ ⏸ 阻塞 ｜ 🗑 废弃
 当前有效坑与排查方法见 `TROUBLESHOOTING.md`；历史案例见 `TROUBLESHOOTING-ARCHIVE.md`；旧清单快照与完整变更记录见 `CHECKLIST-ARCHIVE.md`。
 
-最近更新：2026-11-22 15:05（首个 release `v1.5.3-uu.1` 发布；桌面端升级提示/联网更新检查已禁用；Amyuni 预插修复真机通过）
+最近更新：2026-11-22 15:15（安卓更新检查改接 fork release；`kUuCurrentReleaseTag` 需随发版同步）
 
 ## 工件（当前唯一有效版本）
 
-- 分支 `local/1.5.3-android`，已推 fork（`bfd3e17e3`）。
+- 分支 `local/1.5.3-android`，已推 fork（`210e0af5f`）。
 - 主机 DLL `F42E1A9D…A4A8`（36,215,296 B），15:03 部署运行中（关闭升级提示与联网更新检查）。
-- 手机 APK `rustdesk-uu-android-arm64-2026-11-22-1505.apk`（共享文件夹，已装机），29,300,568 B，`ec2ac984…a414`；旧 1250 已删。
+- 手机 APK 最新 29,305,111 B，`e23c6774…9286`（15:13 构建，含 fork release 更新检查；**未装机**）；上一包 `ec2ac984…a414` 已装机且真机通过；共享文件夹当前仍是 1505 包（`ec2ac984`）。
 - 主机测试包 `rustdesk-uu-host-win64-2026-11-22-1505.zip`（34,194,495 B，`407CA12E…9E26`，含新 DLL + usbmmidd 驱动）；旧 0229 已删。
-- GitHub Release：`v1.5.3-uu.1`（APK + 主机包双资产，草稿已发布）。
+- GitHub Release：`v1.5.3-uu.1`（APK + 主机包双资产；APK 需换为 `e23c6774` 版）。
 - 构建脚本：`%TEMP%\rd-build\build.bat`（DLL）/ `build_apk.bat`（APK）。
 - 安装目录备份：`librustdesk.dll.official-1.5.3.bak`、`librustdesk.dll.selfbuild-prev.bak`（当前为 `7DFD2B9A`）。
 
@@ -22,6 +22,7 @@
 
 - T47 升级提示消失：Windows 客户端首页不再出现粉色「状态 / 你安装的版本比当前运行的低 / 点击这里升级」卡片；也不会再自动检查更新（避免指向上游 release 或覆盖本 DLL）。
 - T48 安全提示行显隐（14:25 包引入，本次复测）：操作抽屉顶部橙色「隐私安全状态需关注」在静音或防窥未开时出现，两者都开后消失。
+- T49 安卓更新检查指向 fork：启动后 logcat 出现 `[uu-diag] fork latest release: v1.5.3-uu.1 (current v1.5.3-uu.1)`；同版本不显示粉色横幅；有新 `-uu.N` 发行时横幅出现且点击打开对应 release 页。
 
 ### 14:55 已真机通过
 
@@ -117,4 +118,5 @@
 - 2026-11-22 14:25 操作卡隐私安全提示行 + 防窥提速：主机锁屏快速失败（DLL `7DFD2B9A`）/ restore 起始 600ms（APK `c9936f76`）。
 - 2026-11-22 14:55 预插轮询认 Amyuni 虚拟屏，锁屏重连少等 2-3s，真机通过（APK `ec2ac984`）。
 - 2026-11-22 15:03 桌面端禁用升级提示与联网更新检查（DLL `F42E1A9D`）；首个 release `v1.5.3-uu.1` 发布。
+- 2026-11-22 15:13 安卓启动更新检查改接 fork release（`kUuCurrentReleaseTag` 发版须同步；APK `e23c6774`）。
 - 更早记录见 `CHECKLIST-ARCHIVE.md`。

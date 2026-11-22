@@ -346,3 +346,17 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 **教训**：替换官方 DLL 的自编译发行版，所有「安装态/更新态」判断（BUILD_DATE、版本接口、auto-update）都要单独审一遍，否则会给用户一个通往上游的陷阱按钮。
 
 **首个发行**：GitHub release `v1.5.3-uu.1`（fork，APK `ec2ac984…` + 主机包 `407CA12E…` 双资产），发行说明含安装步骤与 SHA256。
+
+---
+
+## 案例：安卓启动更新检查改接 fork release（2026-11-22 15:15）
+
+**背景**：安卓端复用官方 1.5.3 `librustdesk.so`，其 `do_check_software_update()` 无法修改：启动时会请求 api.rustdesk.com，把「下载新版本」横幅指向 rustdesk.com；桌面端则因自编译 DLL 禁检而永不提示。两端口径需统一到 fork release。
+
+**做法（纯 Dart，APK）**：
+- `common.dart checkUpdate()`：仅 Android 生效；启动时 `mainSetLocalOption(enable-check-update=N)` 关掉官方检查；1s 后拉 `https://api.github.com/repos/kitsuneMori96/rustdesk/releases/latest`，解析 `tag_name`/`html_url`。
+- 版本比较：标签需匹配 `vX.Y.Z-uu.N`，仅当 N 大于内置 `kUuCurrentReleaseTag` 的 N 才把 URL 写入 `stateGlobal.updateUrl`（横幅出现）；不匹配/网络失败一律静默。
+- `connection_page.dart _buildUpdateUI`：不再硬编码 rustdesk.com，直接打开传入 URL，并在按钮文字后附版本标签。
+- 新版本发布后必须同步把 `consts.dart: kUuCurrentReleaseTag` 改成新标签再打包，否则客户端会重复提示。
+
+**验证**：logcat 启动后应出现 `[uu-diag] fork latest release: v1.5.3-uu.1 (current v1.5.3-uu.1)`；同标签不出现横幅；把常量改小做临时包可验证横幅与跳转。

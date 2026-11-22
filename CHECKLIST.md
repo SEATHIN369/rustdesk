@@ -8,11 +8,11 @@
 
 ## 工件（当前唯一有效版本）
 
-- 分支 `local/1.5.3-android`，已推 fork（`210e0af5f`）。
+- 分支 `local/1.5.3-android`，已推 fork（`73d346f2e`）。
 - 主机 DLL `F42E1A9D…A4A8`（36,215,296 B），15:03 部署运行中（关闭升级提示与联网更新检查）。
-- 手机 APK 最新 29,305,111 B，`e23c6774…9286`（15:13 构建，含 fork release 更新检查；**未装机**）；上一包 `ec2ac984…a414` 已装机且真机通过；共享文件夹当前仍是 1505 包（`ec2ac984`）。
+- 手机 APK 最新 29,304,958 B，`fad350dd…8575`（16:04 灰块修复版，**已装机并截图验证首页正常**）；共享文件夹 `rustdesk-uu-android-arm64-2026-11-22-1604.apk`；错误中间包 `e23c6774`（15:13）已废弃。
 - 主机测试包 `rustdesk-uu-host-win64-2026-11-22-1505.zip`（34,194,495 B，`407CA12E…9E26`，含新 DLL + usbmmidd 驱动）；旧 0229 已删。
-- GitHub Release：`v1.5.3-uu.1`（APK + 主机包双资产；APK 需换为 `e23c6774` 版）。
+- GitHub Release：`v1.5.3-uu.1`（APK `rustdesk-uu-android-arm64-2026-11-22-1604.apk` 29,304,958 B + 主机包，双资产已换为最终版）。
 - 构建脚本：`%TEMP%\rd-build\build.bat`（DLL）/ `build_apk.bat`（APK）。
 - 安装目录备份：`librustdesk.dll.official-1.5.3.bak`、`librustdesk.dll.selfbuild-prev.bak`（当前为 `7DFD2B9A`）。
 
@@ -22,7 +22,7 @@
 
 - T47 升级提示消失：Windows 客户端首页不再出现粉色「状态 / 你安装的版本比当前运行的低 / 点击这里升级」卡片；也不会再自动检查更新（避免指向上游 release 或覆盖本 DLL）。
 - T48 安全提示行显隐（14:25 包引入，本次复测）：操作抽屉顶部橙色「隐私安全状态需关注」在静音或防窥未开时出现，两者都开后消失。
-- T49 安卓更新检查指向 fork：启动后 logcat 出现 `[uu-diag] fork latest release: v1.5.3-uu.1 (current v1.5.3-uu.1)`；同版本不显示粉色横幅；有新 `-uu.N` 发行时横幅出现且点击打开对应 release 页。
+- T49 安卓更新检查指向 fork：启动后 logcat 出现 `[uu-diag] fork latest release: v1.5.3-uu.1 (current v1.5.3-uu.1)`（已见）；同版本不显示粉色横幅且首页正常（已截图确认）；有新 `-uu.N` 发行时横幅出现且点击打开对应 release 页。
 
 ### 14:55 已真机通过
 

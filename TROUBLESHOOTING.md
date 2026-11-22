@@ -360,3 +360,5 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 - 新版本发布后必须同步把 `consts.dart: kUuCurrentReleaseTag` 改成新标签再打包，否则客户端会重复提示。
 
 **验证**：logcat 启动后应出现 `[uu-diag] fork latest release: v1.5.3-uu.1 (current v1.5.3-uu.1)`；同标签不出现横幅；把常量改小做临时包可验证横幅与跳转。
+
+**回归与修复（16:04）**：首版接线包（`e23c6774`）把整个连接页渲染成灰块。原因：`_buildUpdateUI` 先算 `Uri.parse(url).pathSegments.last` 再判断 `url.isEmpty`，空 URL 时 `last` 在空列表上抛 StateError，Obx 子树整体构建失败（release 下表现为灰色占位）。修法：空 URL 首行直接返回占位，标签解析改为空列表保护。`fad350dd` 已装机：首页正常、logcat 仍打印 fork latest release 行。

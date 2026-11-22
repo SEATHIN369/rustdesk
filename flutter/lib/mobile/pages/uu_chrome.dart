@@ -617,8 +617,9 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
   void _commitPrivacyOn() {
     if (!mounted || _privacyPendingOn != true) return;
     _diag('commit ON preplugged=$_privacyPreplugged '
-        'amyuni=${gFFI.ffiModel.pi.isAmyuniIdd} '
-        'vd=${gFFI.ffiModel.pi.RustDeskVirtualDisplays.length} $_privacyFlags');
+        'isAmyuni=${gFFI.ffiModel.pi.isAmyuniIdd} '
+        'vd=${gFFI.ffiModel.pi.RustDeskVirtualDisplays.length} '
+        'amyuni=${gFFI.ffiModel.pi.amyuniVirtualDisplayCount} $_privacyFlags');
     _privacyCommitted = true;
     _privacyProbeTimer?.cancel();
     _privacyAwaitTimer?.cancel();
@@ -631,7 +632,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
     final auto = _privacyAuto;
     final preplug = gFFI.ffiModel.pi.isAmyuniIdd;
     final hadVirtualDisplay =
-        gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty;
+        gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty ||
+            gFFI.ffiModel.pi.amyuniVirtualDisplayCount > 0;
     void requestPrivacy() {
       if (!mounted || _privacyPendingOn != true) return;
       debugPrint(
@@ -656,7 +658,8 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
           return;
         }
         final now = DateTime.now();
-        if (gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty) {
+        if (gFFI.ffiModel.pi.RustDeskVirtualDisplays.isNotEmpty ||
+            gFFI.ffiModel.pi.amyuniVirtualDisplayCount > 0) {
           activeSince ??= now;
         }
         final ready = activeSince != null &&
@@ -664,7 +667,7 @@ class _UuChromeState extends State<UuChrome> with WidgetsBindingObserver {
         final timedOut = now.difference(begin).inSeconds >= 4;
         if (ready || timedOut) {
           t.cancel();
-          _diag('preplug ready=${ready} after '
+          _diag('preplug ready=$ready after '
               '${now.difference(begin).inMilliseconds}ms');
           requestPrivacy();
         }

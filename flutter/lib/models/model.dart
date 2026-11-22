@@ -993,7 +993,7 @@ class FfiModel with ChangeNotifier {
       // Never surface the host's raw privacy error: a commit rejected while
       // the host is locked is expected and recovered by the UU chrome flow.
       debugPrint(
-          '[uu-diag] privacy failure forwarded chromeMounted=$uuState.privacyChromeMounted text="$friendly"');
+          '[uu-diag] privacy failure forwarded chromeMounted=${uuState.privacyChromeMounted} text="$friendly"');
       uuState.reportHostPrivacyFailure(friendly);
       return;
     } else {

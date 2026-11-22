@@ -302,3 +302,22 @@ master 的 Kotlin 调了 1.5.3 里没有的 JNI（`setInputServiceOpen` 等）�
 4. 验证：锁屏重连场景 ≥10 次，p50 ≤6s、无 toast，再定稿。
 
 ---
+
+---
+
+## 案例：预插轮询只认 RustDesk 虚拟屏，Amyuni 主机固定等满 4s（2026-11-22 14:40）
+
+**现象**：14:37 锁屏重连轮，客户端日志 `commit ON ... vd=0` → `preplug ready=false after 4000ms`；主机 14:37:22.9 已发出解锁成功，却拖到 26.9 才提交 turn_on，27.65 防窥生效。
+
+**根因**：预插轮询只看 `pi.RustDeskVirtualDisplays`（RustDesk IDD 列表），但本机被控端用的是 Amyuni usbmmidd，其活动屏数量在另一个平台字段 `pi.amyuniVirtualDisplayCount`（`src/virtual_display_manager.rs:64` 仅在计数 >0 时上报；显示拓扑变化时 `display_service.rs:643` 随 PeerInfo 下发）。主机日志同一轮 `disabled extra display \.\DISPLAY20/21` 证明 Amyuni 屏其实存在，客户端只是没看那个字段。
+
+**修法（纯 Dart，uu_chrome.dart `_commitPrivacyOn`）**：
+- `hadVirtualDisplay` 与轮询判据都改成 `RustDeskVirtualDisplays.isNotEmpty || amyuniVirtualDisplayCount > 0`；有屏就直接提交，不再重复预插、不再空等 4s（预计每轮省 2–3s）。
+- 诊断行加 `isAmyuni=` / `amyuni=<count>`，便于下次一眼定位。
+
+**教训**：平台能力有两个来源字段时，判据要同时覆盖；`vd=0` 不等于没有虚拟屏。
+
+**同轮验证到的其他结论（14:36–14:37 两轮）**：
+- 主机 fast-fail 生效：锁屏时 turn_on 17.814 → 17.817 即回 PrvOnFailed（3ms，原为 4.1s）。
+- revert 后的 auto_unlock 正常：attempt2 成功 181ms / 1609ms，无「密码不正确」。
+- attempt1 补发 Enter 的实验**不安全**（14:29 两轮 3/3 全失败，空密码被提交成错误密码），已回退，不再尝试同类改法。
